@@ -1,5 +1,8 @@
 # commander-orchestrator
 
+[![tests](https://github.com/LlamaAdam/commander-orchestrator/actions/workflows/ci.yml/badge.svg)](https://github.com/LlamaAdam/commander-orchestrator/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 A local dev-automation tool that **autonomously fixes failing pytest tests** in
 a target repo, routing each fix between a cheap local model (qwen2.5-coder via
 Ollama) and the **Claude CLI** under a Max subscription. Trivial/mechanical
@@ -41,4 +44,8 @@ the test suite enforces this. Don't undo it.
 - `tests/` — offline unit suite (no Ollama/Claude/network). See `tests/README.md`.
 - `data/` — runtime state (gitignored).
 
-MIT-style local project; not yet published. See `HANDOFF.md` for status.
+## License
+
+[MIT](LICENSE) © 2026 LlamaAdam.
+
+See `HANDOFF.md` for current status, architecture, and the backlog.
