@@ -18,6 +18,26 @@ def test_parse_bare_json_apply_diff():
     assert fa.files_touched == ["tests/test_x.py"]
 
 
+def test_parse_replace_file_populates_path_and_content():
+    fa = af.parse_fix_action(
+        '{"action":"replace_file","confidence":0.9,"path":"src/foo.py",'
+        '"new_content":"x = 2\\n"}'
+    )
+    assert fa.action == "replace_file"
+    assert fa.path == "src/foo.py"
+    assert fa.new_content == "x = 2\n"
+    # path is mirrored into files_touched so the gating/commit/revert machinery works.
+    assert fa.files_touched == ["src/foo.py"]
+
+
+def test_parse_replace_file_keeps_explicit_files_touched():
+    fa = af.parse_fix_action(
+        '{"action":"replace_file","confidence":0.9,"path":"src/foo.py",'
+        '"new_content":"x\\n","files_touched":["src/foo.py"]}'
+    )
+    assert fa.files_touched == ["src/foo.py"]  # not duplicated
+
+
 def test_parse_loose_json_amid_prose():
     fa = af.parse_fix_action('Sure, here you go: {"action": "escalate", "escalate_reason": "too hard"} -- hope that helps')
     assert fa.action == "escalate"
