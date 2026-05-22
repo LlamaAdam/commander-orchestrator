@@ -17,8 +17,11 @@ from orchestrator.claude_cli import ClaudeResult
 
 def test_build_subscription_env_strips_api_keys():
     base = {
-        "ANTHROPIC_API_KEY": "sk-ant-secret",
-        "ANTHROPIC_AUTH_TOKEN": "tok",
+        # Deliberately NOT key-shaped: build_subscription_env strips by variable
+        # NAME, not value, so a fake placeholder fully exercises the logic while
+        # keeping the public repo free of anything resembling a real key.
+        "ANTHROPIC_API_KEY": "dummy-placeholder-not-a-real-key",
+        "ANTHROPIC_AUTH_TOKEN": "dummy-token",
         "USERPROFILE": r"C:\Users\pilot",
         "HOME": "/home/pilot",
         "PATH": "/usr/bin",
