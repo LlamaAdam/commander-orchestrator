@@ -65,6 +65,50 @@ def test_summarize_events_skips_corrupt_and_missing(tmp_path):
     assert st._summarize_events(p).total_events == 1
 
 
+# --- _check_ollama (delegates to local_model / httpx, not requests) ---------
+
+def test_check_ollama_reachable_with_models(monkeypatch):
+    from orchestrator import local_model as lm
+    monkeypatch.setattr(lm, "list_models", lambda **kw: ["qwen2.5-coder:14b"])
+    o = st._check_ollama()
+    assert o.reachable is True
+    assert o.available_models == ["qwen2.5-coder:14b"]
+
+
+def test_check_ollama_up_but_no_models(monkeypatch):
+    from orchestrator import local_model as lm
+    monkeypatch.setattr(lm, "list_models", lambda **kw: [])
+    monkeypatch.setattr(lm, "ping", lambda **kw: True)
+    o = st._check_ollama()
+    assert o.reachable is True and o.available_models == []
+
+
+def test_check_ollama_unreachable(monkeypatch):
+    from orchestrator import local_model as lm
+    monkeypatch.setattr(lm, "list_models", lambda **kw: [])
+    monkeypatch.setattr(lm, "ping", lambda **kw: False)
+    o = st._check_ollama()
+    assert o.reachable is False
+    assert "not reachable" in o.error
+
+
+def test_check_ollama_never_raises(monkeypatch):
+    from orchestrator import local_model as lm
+    def boom(**kw):
+        raise RuntimeError("network exploded")
+    monkeypatch.setattr(lm, "list_models", boom)
+    o = st._check_ollama()
+    assert o.reachable is False
+    assert "RuntimeError" in o.error
+
+
+def test_status_module_has_no_requests_dependency():
+    """Regression: status must not depend on `requests` (not a project dep).
+    It falsely reported Ollama unreachable on every install lacking it."""
+    import orchestrator.status as mod
+    assert not hasattr(mod, "requests")
+
+
 # --- snapshot composition + formatting -------------------------------------
 
 def test_get_status_snapshot_composes(tmp_path, monkeypatch):

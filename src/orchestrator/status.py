@@ -18,11 +18,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, List, Dict, Union
 
-try:
-    import requests
-except ImportError:
-    requests = None  # type: ignore
-
 
 @dataclass
 class OllamaStatus:
@@ -129,22 +124,24 @@ def _summarize_events(path: Path, window_hours: float = 24.0) -> EventSummary:
 
 
 def _check_ollama(host: str = "http://127.0.0.1:11434", timeout: float = 1.5) -> OllamaStatus:
-    if requests is None:
-        return OllamaStatus(reachable=False, error="requests library not installed")
+    """Probe Ollama via the SAME httpx client the orchestrator uses for real
+    calls (`local_model`), so status reflects what the fix loop actually sees.
+
+    Previously this used `requests`, which isn't a dependency -- so on every
+    install without it the status falsely reported 'reachable: NO (requests
+    library not installed)' even while `local_model` (httpx) was successfully
+    calling Ollama. Never raises -- status must be safe to run anytime."""
+    from . import local_model  # httpx-based; the real runtime client
     try:
-        resp = requests.get(f"{host}/api/tags", timeout=timeout)
-        resp.raise_for_status()
-        data = resp.json()
-        models = []
-        for m in (data.get("models") or []):
-            name = m.get("name", "")
-            if name:
-                models.append(name)
-        return OllamaStatus(reachable=True, available_models=models)
-    except requests.exceptions.RequestException as exc:
+        models = local_model.list_models(base_url=host, timeout=timeout)
+        if models:
+            return OllamaStatus(reachable=True, available_models=models)
+        # No models listed -- distinguish "up but empty" from "down".
+        if local_model.ping(base_url=host, timeout=timeout):
+            return OllamaStatus(reachable=True, available_models=[])
+        return OllamaStatus(reachable=False, error=f"not reachable at {host}")
+    except Exception as exc:  # defensive: a status probe must never crash
         return OllamaStatus(reachable=False, error=f"{type(exc).__name__}: {exc}")
-    except (ValueError, KeyError) as exc:
-        return OllamaStatus(reachable=False, error=f"unexpected response: {exc}")
 
 
 def get_status_snapshot(
