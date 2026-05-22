@@ -29,7 +29,9 @@ subscription, rate-limited not per-token) for the hard cases.
   working home now.
 - **Venv:** `.venv` (Python 3.12). To run against commander-builder, also
   `pip install -e C:\dev\commander-builder` into this venv.
-- **git-tracked** (initial commit on `main`). `data/` runtime is gitignored.
+- **Published:** https://github.com/LlamaAdam/commander-orchestrator (MIT;
+  GitHub Actions CI runs the offline 130-test suite on push/PR). `main` tracks
+  `origin/main`. `data/` runtime is gitignored.
 - **Target repo:** `C:\dev\commander-builder`; the fix loop reads `--repo-dir`
   (junction `data/repos/commander-builder` or pass the path directly).
 
