@@ -1,0 +1,17 @@
+# Patterns are fnmatch globs. One per line. # for comments.
+# These are the DEFAULTS auto_fix.py uses if data/danger_list.txt is absent.
+pyproject.toml
+setup.py
+setup.cfg
+requirements*.txt
+Pipfile*
+poetry.lock
+.env*
+**/.env*
+**/secrets/**
+**/credentials*
+**/migrations/**
+**/auth/**
+**/security/**
+.github/workflows/**
+.gitlab-ci.yml

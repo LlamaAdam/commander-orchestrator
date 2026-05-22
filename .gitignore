@@ -1,0 +1,20 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# orchestrator runtime data (state, logs, fetched repos) -- not for VCS.
+# Ignore data/* contents but keep the config template (note: .gitignore has
+# NO inline comments, and you can't re-include a file under a fully-ignored dir).
+data/*
+!data/danger_list.txt.example
+*.db
+*.db-journal
+events.jsonl
+latest_health.md
+quota_state.json
