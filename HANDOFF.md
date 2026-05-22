@@ -30,7 +30,7 @@ subscription, rate-limited not per-token) for the hard cases.
 - **Venv:** `.venv` (Python 3.12). To run against commander-builder, also
   `pip install -e C:\dev\commander-builder` into this venv.
 - **Published:** https://github.com/LlamaAdam/commander-orchestrator (MIT;
-  GitHub Actions CI runs the offline 140-test suite on push/PR). `main` tracks
+  GitHub Actions CI runs the offline 141-test suite on push/PR). `main` tracks
   `origin/main`. `data/` runtime is gitignored.
 - **Target repo:** `C:\dev\commander-builder`; the fix loop reads `--repo-dir`
   (junction `data/repos/commander-builder` or pass the path directly).
@@ -94,7 +94,7 @@ auto_fix_attempt / idle_streak).
 
 ## Tests
 
-`.venv\Scripts\python -m pytest` → **140 passing**, offline (no Ollama/Claude/
+`.venv\Scripts\python -m pytest` → **141 passing**, offline (no Ollama/Claude/
 network/Forge; all seams stubbed). See `tests/README.md`. Modules covered:
 quota, triage, router, auto_fix (pure/tiers/gitops), report, claude_cli (incl.
 the billing invariant), harness runner+bundle+clone, status, local_model, cli.
@@ -130,8 +130,9 @@ the billing invariant), harness runner+bundle+clone, status, local_model, cli.
   opt-in via `--poll-head`); `--stop-when-idle N` exits after N idle cycles.
   VALIDATED: a `--hours 12 --stop-when-idle 2` run fixed tier-1 then stopped
   itself after 3 cycles (~23min), not 12h.
-- **128 → 130 → 140 tests** (apply_diff fence + headerless-hunk repair; then
-  +10 for `replace_file`: parse, apply guards, and end-to-end tier-2 fix/revert).
+- **128 → 130 → 140 → 141 tests** (apply_diff fence + headerless-hunk repair;
+  then +10 for `replace_file`: parse, apply guards, end-to-end tier-2
+  fix/revert; then +1 for the tier-2 retry-prompt fix found by the live dogfood).
 - **Handoffs split** (this file + commander-builder/docs/HANDOFF.md) to end
   the two-program confusion.
 
@@ -145,16 +146,28 @@ the billing invariant), harness runner+bundle+clone, status, local_model, cli.
 
 ## Next / open  ← START HERE
 
-- **★ TOP RECOMMENDATION — DOGFOOD `replace_file` against a real source bug.**
-  bug #5 is fixed in code + tests (140 passing offline), but it has NOT yet been
-  exercised against a live tier-2 Claude run. Seed a source bug on a scratch
-  branch in commander-builder, clear `data/auto_fix_seen.json`, run `orch fix`,
-  and confirm tier-2 now ends `fixed` (Claude returns `replace_file` with the
-  full corrected file) instead of `apply_failed`. This closes the loop the
-  unified-diff tar pit was blocking. Watch for: Claude still choosing
-  `apply_diff` over `replace_file` (tighten the prompt nudge if so), and very
-  large files where returning the whole file is wasteful (function-level
-  replacement is a possible future refinement — currently full-file only).
+- **`replace_file` DOGFOODED LIVE & PASSED (2026-05-22). ✅** Seeded a source
+  bug (`average()` multiplies instead of divides) in a throwaway repo
+  `C:\dev\rf-dogfood`, ran `orch fix --repo-dir C:\dev\rf-dogfood`. Tier-2
+  Claude returned `replace_file` with the COMPLETE corrected file → written
+  directly → pytest went green → committed on an auto-fix branch. Result:
+  `fixed=1 handler=claude [tier2] action=replace_file`. The diff tar pit is
+  closed for source bugs.
+  - **The dogfood ALSO surfaced + fixed a real tier-2 PROMPT bug:** on the
+    first attempt Claude *escalated* the trivial fix (conf 0.95), reasoning
+    "the fix touches a non-test source file → local policy blocks it → needs a
+    human." It over-generalized the LOCAL model's test-only restriction to
+    itself. Root cause: the retry prompt carried the prior "rejected: touches
+    non-test file" reason forward and said "propose something DIFFERENT or
+    escalate." Fixed `build_fix_action_prompt`'s `prior_attempt` block to state
+    that the higher tier MAY edit source files and must not escalate merely
+    because a fix touches non-test source (regression test in
+    test_auto_fix_pure.py). Re-run after the fix → `fixed`.
+- **Open follow-ups for `replace_file`:** (a) very large files — returning the
+  whole file is wasteful; function-level replacement is a possible future
+  refinement (currently full-file only). (b) Could exercise it against a REAL
+  commander-builder source bug (the rf-dogfood repo is synthetic);
+  commander-builder isn't pip-installed in this venv right now.
 - The FP-002 data-gen scripts here (`generate_sameprocess.py`, `train_fp002.py`)
   belong to commander-builder's FP-002 effort — see that repo's handoff;
   conclusion there: kept-vs-reverted is not viable via the curator+Forge sim.

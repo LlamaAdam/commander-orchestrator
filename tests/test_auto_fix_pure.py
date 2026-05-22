@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from orchestrator import auto_fix as af
-from conftest import make_failure
+from conftest import make_failure, make_bundle
 
 
 # --- parse_fix_action -------------------------------------------------------
@@ -53,6 +53,30 @@ def test_parse_unknown_action_becomes_escalate():
     fa = af.parse_fix_action('{"action": "rm_rf_slash", "confidence": 1.0}')
     assert fa.action == "escalate"
     assert "unknown action" in fa.escalate_reason
+
+
+# --- build_fix_action_prompt (tier-2 retry framing) -------------------------
+
+def test_retry_prompt_permits_source_edits_and_resists_escalation():
+    """Regression (dogfood 2026-05-22): the tier-2 retry prompt must tell the
+    higher-tier model it MAY edit source files, so it does not over-generalize
+    the local model's test-only restriction and escalate a real fix. The first
+    live dogfood failed exactly here -- Claude escalated a trivial source fix
+    because the prior-attempt context said it was 'rejected: touches non-test
+    file'."""
+    prior = af._format_prior_attempt(
+        af.FixAction(action="replace_file", confidence=0.9, path="src/mod.py"),
+        outcome="escalated",
+        error="local replace_file touches non-test file(s) ['src/mod.py']",
+    )
+    p = af.build_fix_action_prompt(make_bundle(), prior_attempt=prior).lower()
+    assert "replace_file" in p
+    # Explicitly grants source-file editing at this tier...
+    assert "source" in p and "not just test" in p
+    # ...and warns against escalating merely because a fix touches a source file.
+    assert "do not escalate merely because" in p
+    # The plain (first-attempt) prompt must NOT carry the tier-2 escalation note.
+    assert "higher trust tier" not in af.build_fix_action_prompt(make_bundle()).lower()
 
 
 # --- _safe_package_spec -----------------------------------------------------

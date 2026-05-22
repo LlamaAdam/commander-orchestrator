@@ -227,8 +227,20 @@ def build_fix_action_prompt(bundle: FailureBundle, *, prior_attempt: str = "") -
         suffix += (
             "\n## PRIOR ATTEMPT (this failure has already been tried)\n"
             f"{prior_attempt}\n"
-            "Propose something DIFFERENT from the prior attempt. If you cannot "
-            "improve on it, respond with `escalate`.\n"
+            "\nYou are a MORE CAPABLE model operating at a HIGHER TRUST TIER "
+            "than whatever made the prior attempt. You ARE allowed to edit "
+            "SOURCE files, not just tests -- anything except config / secrets / "
+            "migrations / CI / auth code (those still escalate).\n"
+            "- If the prior attempt was escalated ONLY because the previous "
+            "model is restricted to test files, that restriction does NOT apply "
+            "to you: implement the real fix in the source file. Do NOT escalate "
+            "merely because the fix touches a non-test source file -- prefer "
+            "`replace_file` with the COMPLETE corrected file.\n"
+            "- If the prior attempt's edit FAILED to apply or REGRESSED tests, "
+            "propose a corrected fix (e.g. switch `apply_diff` -> "
+            "`replace_file`).\n"
+            "- Escalate only when a human is genuinely required (the fix needs a "
+            "forbidden path, or you cannot determine a safe fix).\n"
         )
     return base + suffix
 
