@@ -201,6 +201,33 @@ def test_needs_human_render_shows_only_open(tmp_path):
     assert "1 open, 1 resolved" in text
 
 
+# --- test-weakening detector ------------------------------------------------
+
+def test_detect_weakening_flags_removed_assertion():
+    before = "def t():\n    assert a == 1\n    assert b == 2\n"
+    after = "def t():\n    assert a == 1\n"
+    assert af.detect_test_weakening(before, after) == "assertions removed"
+
+
+def test_detect_weakening_flags_added_skip():
+    before = "def t():\n    assert a\n"
+    after = "import pytest\n@pytest.mark.skip\ndef t():\n    assert a\n"
+    assert "skip/xfail" in af.detect_test_weakening(before, after)
+
+
+def test_detect_weakening_allows_genuine_changes():
+    before = "def t():\n    assert a == 1\n"
+    # Same assertion count, value changed (could be a legit test correction) -> allowed.
+    assert af.detect_test_weakening(before, "def t():\n    assert a == 2\n") == ""
+    # Adding assertions is never weakening.
+    assert af.detect_test_weakening(before, "def t():\n    assert a == 1\n    assert c\n") == ""
+
+
+def test_count_assertions_recognizes_unittest_and_raises():
+    txt = "self.assertEqual(x, 1)\nwith pytest.raises(ValueError):\n    assert y\n"
+    assert af._count_assertions(txt) == 3
+
+
 def test_needs_human_archives_legacy_md_once(tmp_path):
     # A pre-existing freeform .md (old append-only format) must not be lost.
     data = tmp_path / "data"

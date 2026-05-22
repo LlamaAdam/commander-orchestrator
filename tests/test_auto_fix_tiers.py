@@ -122,6 +122,38 @@ def test_dry_run_reports_would_apply_without_applying(tmp_path, stub_seams):
     assert attempt.action.action == "install_package"
 
 
+def test_local_test_weakening_is_refused_and_reverted(git_repo, monkeypatch):
+    """A local apply_diff that guts the failing test's assertion must be refused
+    (escalated) and reverted -- the orchestrator never makes a suite green by
+    weakening a test."""
+    monkeypatch.setattr(af, "bundle_failure", lambda failure, repo_dir: make_bundle())
+    # Only the baseline pytest runs; the guard fires before the after-run.
+    monkeypatch.setattr(af, "run_pytest",
+                        lambda repo_dir, lane="fast": _pytest_result(n_failed=1))
+
+    weakening_diff = (
+        "diff --git a/tests/test_x.py b/tests/test_x.py\n"
+        "--- a/tests/test_x.py\n"
+        "+++ b/tests/test_x.py\n"
+        "@@ -1,2 +1,2 @@\n"
+        " def test_x():\n"
+        "-    assert True\n"
+        "+    pass\n"
+    )
+    action = json.dumps({"action": "apply_diff", "confidence": 0.9,
+                         "reasoning": "make it pass", "diff": weakening_diff,
+                         "files_touched": ["tests/test_x.py"]})
+    router = FakeRouter(handle=TaskResult(success=True, handler="local", text=action))
+
+    attempt = af.auto_fix_one(make_failure(nodeid="tests/test_x.py::test_x"),
+                              git_repo, project_root=git_repo, router=router,
+                              enable_claude_retry=False)
+    assert attempt.status == "escalated"
+    assert "weakens test" in attempt.reason
+    # Reverted to the committed, still-asserting form.
+    assert "assert True" in (git_repo / "tests" / "test_x.py").read_text(encoding="utf-8")
+
+
 def test_tier3_cap_skips_without_attempting(tmp_path, monkeypatch):
     """auto_fix_failures hard-skips a failure that already hit the attempt cap,
     without invoking auto_fix_one at all."""

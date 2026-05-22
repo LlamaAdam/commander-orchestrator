@@ -408,6 +408,61 @@ def apply_diff(diff_text: str, repo_dir: Path, timeout: int = 60) -> ApplyResult
             pass
 
 
+# --- test-integrity guard ---------------------------------------------------
+
+# An auto-fix must NEVER make a failing test pass by gutting it. We refuse a
+# fix that, in any TEST file it touches, removes assertions or introduces a
+# skip/xfail marker relative to the committed version -- the classic ways to
+# mask a real bug. (Changing an asserted *value* isn't caught here; removal of
+# assertions and skip/xfail injection are the high-signal, low-false-positive
+# patterns, and they're the ones that silently turn red green.)
+_ASSERT_RE = re.compile(r"\bassert\b|\bpytest\.raises\b|\.assert[A-Za-z]+\s*\(")
+_SKIP_XFAIL_RE = re.compile(r"pytest\.mark\.(?:skip|skipif|xfail)|pytest\.(?:skip|xfail)\s*\(|unittest\.skip")
+
+
+def _count_assertions(text: str) -> int:
+    return len(_ASSERT_RE.findall(text or ""))
+
+
+def _count_skips(text: str) -> int:
+    return len(_SKIP_XFAIL_RE.findall(text or ""))
+
+
+def detect_test_weakening(before: str, after: str) -> str:
+    """Return a reason if `after` weakens `before` as a test file, else ''."""
+    if _count_assertions(after) < _count_assertions(before):
+        return "assertions removed"
+    if _count_skips(after) > _count_skips(before):
+        return "skip/xfail marker added"
+    return ""
+
+
+def _committed_text(repo_dir: Path, rel_path: str) -> str:
+    """Content of `rel_path` at git HEAD, or '' if untracked/new/missing."""
+    proc = _git(["show", f"HEAD:{rel_path.replace(chr(92), '/')}"], cwd=repo_dir)
+    return proc.stdout if proc.returncode == 0 else ""
+
+
+def check_no_test_weakening(repo_dir: Path, touched_files: List[str]) -> str:
+    """For each touched TEST file, compare its new (working-tree) content to the
+    committed version; return a reason if any was weakened, else ''. Newly
+    added test files have no committed baseline and are left to verification."""
+    for rel in touched_files:
+        if not _is_test_file(rel):
+            continue
+        before = _committed_text(repo_dir, rel)
+        if not before:
+            continue
+        try:
+            after = (Path(repo_dir) / rel).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        reason = detect_test_weakening(before, after)
+        if reason:
+            return f"{rel}: {reason}"
+    return ""
+
+
 # --- branch lifecycle -------------------------------------------------------
 
 def _dirty_paths(porcelain_output: str) -> set:
@@ -866,6 +921,16 @@ def _try_action(
             revert_files(repo_dir, touched_files, orig_branch)
         return _done(status="apply_failed", action=action, branch=branch_name,
                      reason=ar.error)
+
+    # Test-integrity guard: never accept a fix that weakens a touched test file
+    # (removes assertions / adds skip|xfail) -- that would make the suite green
+    # by masking the bug. Checked BEFORE pytest so we reject without a run.
+    if touched_files:
+        weak = check_no_test_weakening(repo_dir, touched_files)
+        if weak:
+            revert_files(repo_dir, touched_files, orig_branch)
+            return _done(status="escalated", action=action, branch=branch_name,
+                         reason=f"refused: edit weakens test ({weak})")
 
     after = run_pytest(repo_dir, lane="fast")
     after_fail = after.n_failed + after.n_errors
