@@ -215,14 +215,17 @@ def _cmd_fix(args):
 
 
 def _cmd_pending(args):
-    path = Path(args.project_root) / "data" / "needs_human.md"
+    from .auto_fix import load_needs_human_index
+    project_root = Path(args.project_root)
+    path = project_root / "data" / "needs_human.md"
+    index = load_needs_human_index(project_root)
+    n_open = sum(1 for e in index.values() if e.get("status") == "open")
+    n_resolved = sum(1 for e in index.values() if e.get("status") == "resolved")
+    if args.count:
+        print(f"{n_open} open escalations ({n_resolved} resolved) in {path}")
+        return 0
     if not path.exists():
         print("data/needs_human.md does not exist -- nothing pending.")
-        return 0
-    if args.count:
-        text = path.read_text(encoding="utf-8", errors="replace")
-        n = text.count("\n## ")
-        print(f"{n} pending escalations in {path}")
         return 0
     print(path.read_text(encoding="utf-8", errors="replace"))
     return 0

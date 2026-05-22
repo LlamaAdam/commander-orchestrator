@@ -154,3 +154,61 @@ def test_parse_verification_unparseable_is_reject():
     v = af.parse_verification("I approve this fix!")
     assert v.approve is False
     assert "unparseable" in v.reason
+
+
+# --- needs_human queue: structured index, dedup, resolve, render ------------
+
+def test_needs_human_append_creates_open_entry(tmp_path):
+    f = make_failure(nodeid="tests/test_a.py::test_x")
+    md = af.append_needs_human(tmp_path, failure=f, action=None, reason="stuck")
+    idx = af.load_needs_human_index(tmp_path)
+    assert idx["tests/test_a.py::test_x"]["status"] == "open"
+    assert "tests/test_a.py::test_x" in md.read_text(encoding="utf-8")
+
+
+def test_needs_human_dedups_by_nodeid(tmp_path):
+    f = make_failure(nodeid="tests/test_a.py::test_x")
+    af.append_needs_human(tmp_path, failure=f, action=None, reason="try 1")
+    af.append_needs_human(tmp_path, failure=f, action=None, reason="try 2")
+    idx = af.load_needs_human_index(tmp_path)
+    # ONE entry, not two; count bumped; latest reason kept.
+    assert len(idx) == 1
+    entry = idx["tests/test_a.py::test_x"]
+    assert entry["escalation_count"] == 2
+    assert entry["reason"] == "try 2"
+
+
+def test_needs_human_resolve_clears_from_open_view(tmp_path):
+    f = make_failure(nodeid="tests/test_a.py::test_x")
+    md = af.append_needs_human(tmp_path, failure=f, action=None, reason="stuck")
+    assert "tests/test_a.py::test_x" in md.read_text(encoding="utf-8")
+
+    assert af.resolve_needs_human(tmp_path, nodeid="tests/test_a.py::test_x") is True
+    idx = af.load_needs_human_index(tmp_path)
+    assert idx["tests/test_a.py::test_x"]["status"] == "resolved"
+    # The rendered .md (open-only) no longer lists it.
+    assert "tests/test_a.py::test_x" not in md.read_text(encoding="utf-8")
+    # Resolving again is a no-op.
+    assert af.resolve_needs_human(tmp_path, nodeid="tests/test_a.py::test_x") is False
+
+
+def test_needs_human_render_shows_only_open(tmp_path):
+    af.append_needs_human(tmp_path, failure=make_failure(nodeid="t::open"), action=None, reason="r1")
+    af.append_needs_human(tmp_path, failure=make_failure(nodeid="t::done"), action=None, reason="r2")
+    af.resolve_needs_human(tmp_path, nodeid="t::done")
+    text = af.needs_human_md_path(tmp_path).read_text(encoding="utf-8")
+    assert "t::open" in text and "t::done" not in text
+    assert "1 open, 1 resolved" in text
+
+
+def test_needs_human_archives_legacy_md_once(tmp_path):
+    # A pre-existing freeform .md (old append-only format) must not be lost.
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "needs_human.md").write_text("## legacy entry\n- old freeform note\n", encoding="utf-8")
+    af.append_needs_human(tmp_path, failure=make_failure(nodeid="t::new"), action=None, reason="r")
+    archive = data / "needs_human.archive.md"
+    assert archive.exists()
+    assert "legacy entry" in archive.read_text(encoding="utf-8")
+    # The live .md is now the rendered open view.
+    assert "t::new" in (data / "needs_human.md").read_text(encoding="utf-8")

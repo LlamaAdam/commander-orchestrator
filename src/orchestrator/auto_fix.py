@@ -623,34 +623,136 @@ def verify_action_with_claude(bundle: FailureBundle, action: FixAction,
 
 # --- escalation -------------------------------------------------------------
 
+# The human-escalation queue is backed by a structured index keyed by nodeid
+# (data/needs_human.json) and a rendered, human-readable view
+# (data/needs_human.md). Keying by nodeid means repeated escalations of the
+# same failing test update ONE entry instead of appending a new section every
+# attempt, and lets the loop RESOLVE an entry once that test passes again --
+# so `orch pending` shows only genuinely-open items, not stale history.
+
+def needs_human_index_path(project_root: Path) -> Path:
+    return Path(project_root) / "data" / "needs_human.json"
+
+
+def needs_human_md_path(project_root: Path) -> Path:
+    return Path(project_root) / "data" / "needs_human.md"
+
+
+def load_needs_human_index(project_root: Path) -> dict:
+    p = needs_human_index_path(project_root)
+    if not p.exists():
+        return {}
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _action_summary(action: Optional[FixAction]) -> Optional[dict]:
+    if action is None:
+        return None
+    return {
+        "action": action.action,
+        "confidence": action.confidence,
+        "reasoning": action.reasoning[:300],
+        "package": action.package,
+        "files_touched": list(action.files_touched),
+        "escalate_reason": action.escalate_reason[:300],
+    }
+
+
+def _render_needs_human_md(index: dict) -> str:
+    """Render the OPEN entries of the index as the human-readable queue.
+
+    Same per-failure layout as before; open items only, newest first. A short
+    footer notes how many were auto-resolved so the file isn't silently lossy."""
+    open_entries = [e for e in index.values() if e.get("status") == "open"]
+    resolved = sum(1 for e in index.values() if e.get("status") == "resolved")
+    open_entries.sort(key=lambda e: e.get("last_ts", 0), reverse=True)
+    out = ["# Needs human - open escalations",
+           "",
+           f"_{len(open_entries)} open, {resolved} resolved (auto-cleared once their test passed)._"]
+    for e in open_entries:
+        ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(e.get("last_ts", 0)))
+        out.append(f"\n## {ts} -- `{e.get('nodeid','')}`")
+        if e.get("escalation_count", 1) > 1:
+            out.append(f"- **escalated**: {e['escalation_count']}x (first {time.strftime('%Y-%m-%d %H:%M', time.localtime(e.get('first_ts', 0)))})")
+        out.append(f"- **reason**: {e.get('reason','')}")
+        out.append(f"- **failure type**: {e.get('failure_type','')}")
+        out.append(f"- **pytest message**: {e.get('message') or '(none)'}")
+        a = e.get("action")
+        if a:
+            out.append(f"- **action proposed**: `{a.get('action')}` (confidence {a.get('confidence')})")
+            if a.get("reasoning"):
+                out.append(f"- **model reasoning**: {a['reasoning']}")
+            if a.get("action") == "install_package" and a.get("package"):
+                out.append(f"- **suggested package**: `{a['package']}`")
+            if a.get("files_touched"):
+                out.append(f"- **files touched**: {', '.join(a['files_touched'])}")
+            if a.get("escalate_reason"):
+                out.append(f"- **model escalate reason**: {a['escalate_reason']}")
+        if e.get("extra"):
+            out += ["", e["extra"]]
+    return "\n".join(out) + "\n"
+
+
+def _save_needs_human(project_root: Path, index: dict) -> Path:
+    """Persist the index and re-render the .md view. On the FIRST structured
+    write, archive any pre-existing freeform .md so legacy content isn't lost."""
+    data_dir = Path(project_root) / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    idx_path = needs_human_index_path(project_root)
+    md_path = needs_human_md_path(project_root)
+    if not idx_path.exists() and md_path.exists():
+        try:
+            md_path.replace(data_dir / "needs_human.archive.md")
+        except OSError:
+            pass
+    idx_path.write_text(json.dumps(index, indent=2), encoding="utf-8")
+    md_path.write_text(_render_needs_human_md(index), encoding="utf-8")
+    return md_path
+
+
 def append_needs_human(project_root: Path, *, failure: TestFailure,
                        action: Optional[FixAction], reason: str,
                        extra: str = "") -> Path:
-    out = project_root / "data" / "needs_human.md"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    ts = time.strftime("%Y-%m-%d %H:%M:%S")
-    lines = [
-        f"\n## {ts} -- `{failure.nodeid}`",
-        f"- **reason**: {reason}",
-        f"- **failure type**: {failure.failure_type}",
-        f"- **pytest message**: {(failure.message or '').splitlines()[0][:200] if failure.message else '(none)'}",
-    ]
-    if action:
-        lines += [
-            f"- **action proposed**: `{action.action}` (confidence {action.confidence})",
-            f"- **model reasoning**: {action.reasoning[:300]}",
-        ]
-        if action.action == "install_package" and action.package:
-            lines.append(f"- **suggested package**: `{action.package}`")
-        if action.files_touched:
-            lines.append(f"- **files touched**: {', '.join(action.files_touched)}")
-        if action.escalate_reason:
-            lines.append(f"- **model escalate reason**: {action.escalate_reason}")
-    if extra:
-        lines += ["", extra]
-    with out.open("a", encoding="utf-8") as f:
-        f.write("\n".join(lines) + "\n")
-    return out
+    """Record (or update) an open escalation for a failing test, keyed by
+    nodeid. Repeated escalations of the same test update the single entry and
+    bump its count rather than appending a fresh section each attempt."""
+    project_root = Path(project_root)
+    index = load_needs_human_index(project_root)
+    now = time.time()
+    msg = (failure.message or "").splitlines()[0][:200] if failure.message else ""
+    prev = index.get(failure.nodeid) or {}
+    index[failure.nodeid] = {
+        "nodeid": failure.nodeid,
+        "status": "open",
+        "reason": reason,
+        "failure_type": failure.failure_type,
+        "message": msg,
+        "action": _action_summary(action),
+        "extra": extra,
+        "escalation_count": int(prev.get("escalation_count", 0)) + 1,
+        "first_ts": prev.get("first_ts", now),
+        "last_ts": now,
+        "resolved_ts": None,
+    }
+    return _save_needs_human(project_root, index)
+
+
+def resolve_needs_human(project_root: Path, *, nodeid: str) -> bool:
+    """Mark any open escalation for `nodeid` resolved (its test passes now).
+    Returns True if an open entry was cleared. Re-renders the .md view."""
+    project_root = Path(project_root)
+    index = load_needs_human_index(project_root)
+    entry = index.get(nodeid)
+    if not entry or entry.get("status") != "open":
+        return False
+    entry["status"] = "resolved"
+    entry["resolved_ts"] = time.time()
+    _save_needs_human(project_root, index)
+    return True
 
 
 # --- core: fix one failure --------------------------------------------------
@@ -1087,10 +1189,14 @@ def auto_fix_failures(
             new_count = 0
             new_regressions = 0
             prev.pop("cap_escalated", None)
+            # Clear any prior open escalation for this test -- it passes now.
+            resolve_needs_human(project_root, nodeid=failure.nodeid)
         elif attempt.status == "already_fixed":
             run.n_already_fixed += 1
             # Treat like a success for counter purposes -- nothing to retry.
             prev.pop("cap_escalated", None)
+            # A sibling fix made this test pass -- clear its open escalation too.
+            resolve_needs_human(project_root, nodeid=failure.nodeid)
         elif attempt.status == "escalated":
             run.n_escalated += 1
         elif attempt.status == "regressed":
