@@ -30,7 +30,7 @@ subscription, rate-limited not per-token) for the hard cases.
 - **Venv:** `.venv` (Python 3.12). To run against commander-builder, also
   `pip install -e C:\dev\commander-builder` into this venv.
 - **Published:** https://github.com/LlamaAdam/commander-orchestrator (MIT;
-  GitHub Actions CI runs the offline 130-test suite on push/PR). `main` tracks
+  GitHub Actions CI runs the offline 141-test suite on push/PR). `main` tracks
   `origin/main`. `data/` runtime is gitignored.
 - **Target repo:** `C:\dev\commander-builder`; the fix loop reads `--repo-dir`
   (junction `data/repos/commander-builder` or pass the path directly).
@@ -55,8 +55,9 @@ entirely failure-driven. To exercise it you need failing tests.
 ## Architecture (3 tiers)
 
 - **Tier 1 (local):** `triage.py` routes to qwen via Ollama; emits a JSON
-  action (`install_package` | `apply_diff` | `escalate`). Local `apply_diff`
-  is gated to TEST files only (`LOCAL_ONLY_DIFF_PATTERNS`); source diffs escalate.
+  action (`install_package` | `replace_file` | `apply_diff` | `escalate`).
+  Local file edits (`apply_diff`/`replace_file`) are gated to TEST files only
+  (`LOCAL_ONLY_DIFF_PATTERNS`); source edits escalate to tier 2.
 - **Tier 2 (Claude fallback):** if local's action fails/escalates,
   `Router.handle_claude_only` retries via Claude (bypasses triage). Gated by
   `quota.is_blocked()` and `--no-claude-retry`.
@@ -93,7 +94,7 @@ auto_fix_attempt / idle_streak).
 
 ## Tests
 
-`.venv\Scripts\python -m pytest` → **128 passing**, offline (no Ollama/Claude/
+`.venv\Scripts\python -m pytest` → **141 passing**, offline (no Ollama/Claude/
 network/Forge; all seams stubbed). See `tests/README.md`. Modules covered:
 quota, triage, router, auto_fix (pure/tiers/gitops), report, claude_cli (incl.
 the billing invariant), harness runner+bundle+clone, status, local_model, cli.
@@ -110,20 +111,28 @@ the billing invariant), harness runner+bundle+clone, status, local_model, cli.
      extracts the failing function by line. ✅
   4. `apply_diff` used a cwd-relative patch path → "can't open patch" with a
      relative `--repo-dir` → now absolute. ✅
-  5. **LLM unified diffs are a TAR PIT (PARTIAL).** `apply_diff` now
-     `sanitize_diff`s (strips ```` ```diff ```` fences/prose), normalizes
-     header-less `@@` hunks to `@@ -1 +1 @@`, and retries `[]`→`--recount`→
-     `--recount --unidiff-zero`. This fixed 3 successive quirks (fences "No
-     valid patches" → headerless hunks "garbage at line 4" → ...), but a 4th
-     remains: Claude's diff has a placeholder/wrong start line + real context,
-     so git still can't locate the hunk. **Claude DIAGNOSES correctly every
-     time (conf 0.88) — only diff *application* is brittle.** See the
-     recommendation in Next/open.
+  5. **LLM unified diffs were a TAR PIT → SIDESTEPPED via `replace_file` (2026-05-22). ✅**
+     `apply_diff` had been hardened with `sanitize_diff` (strips ```` ```diff ````
+     fences/prose), header-less `@@` normalization, and `[]`→`--recount`→
+     `--recount --unidiff-zero` retries — but `git apply` kept failing on
+     placeholder/wrong start lines. **Claude DIAGNOSED correctly every time
+     (conf 0.88); only diff *application* was brittle.** Fix: added a new
+     **`replace_file`** action — Claude returns the COMPLETE corrected file in
+     `new_content` and `apply_replace_file` writes it directly (no git apply,
+     hunk headers, line numbers, or context matching). The prompt now PREFERS
+     `replace_file` for code changes; `apply_diff` is kept as a fallback. Safety:
+     path must resolve inside the repo (no traversal via `_resolve_in_repo`),
+     target must already exist, content non-empty; reuses the same WIP-safe
+     branch/commit/revert + danger-list + local-only-test-file gating as
+     apply_diff. (`auto_fix.apply_replace_file`, schema in
+     `build_fix_action_prompt`, tests in test_auto_fix_{pure,gitops,tiers}.py.)
 - **`run_continuous`:** runs every cycle by default now (HEAD-poll gating is
   opt-in via `--poll-head`); `--stop-when-idle N` exits after N idle cycles.
   VALIDATED: a `--hours 12 --stop-when-idle 2` run fixed tier-1 then stopped
   itself after 3 cycles (~23min), not 12h.
-- **128 → 130 tests** (apply_diff fence + headerless-hunk repair).
+- **128 → 130 → 140 → 141 tests** (apply_diff fence + headerless-hunk repair;
+  then +10 for `replace_file`: parse, apply guards, end-to-end tier-2
+  fix/revert; then +1 for the tier-2 retry-prompt fix found by the live dogfood).
 - **Handoffs split** (this file + commander-builder/docs/HANDOFF.md) to end
   the two-program confusion.
 
@@ -137,19 +146,28 @@ the billing invariant), harness runner+bundle+clone, status, local_model, cli.
 
 ## Next / open  ← START HERE
 
-- **★ TOP RECOMMENDATION — fix bug #5 via FULL-FILE REPLACEMENT, not more diff
-  quirks.** The dogfood proved tier-2 Claude reliably *diagnoses* source bugs
-  but applying its unified diffs via `git apply` is a tar pit (4 distinct
-  quirks and counting). Add a `replace_file` action alongside `apply_diff`:
-  have Claude return the COMPLETE corrected file (or function) and write it
-  directly — no git apply, hunk headers, line numbers, or context matching.
-  This sidesteps the whole class and is the one thing standing between the
-  orchestrator and closing the loop on real source bugs. (Change: auto_fix
-  apply path + the fix-action prompt schema in `build_fix_action_prompt` +
-  tests.)
-- To reproduce bug #5: seed a source bug on a scratch branch, clear
-  `data/auto_fix_seen.json`, run `orch fix`; tier-2 ends `apply_failed` with
-  a diff preview in `data/needs_human.md`.
+- **`replace_file` DOGFOODED LIVE & PASSED (2026-05-22). ✅** Seeded a source
+  bug (`average()` multiplies instead of divides) in a throwaway repo
+  `C:\dev\rf-dogfood`, ran `orch fix --repo-dir C:\dev\rf-dogfood`. Tier-2
+  Claude returned `replace_file` with the COMPLETE corrected file → written
+  directly → pytest went green → committed on an auto-fix branch. Result:
+  `fixed=1 handler=claude [tier2] action=replace_file`. The diff tar pit is
+  closed for source bugs.
+  - **The dogfood ALSO surfaced + fixed a real tier-2 PROMPT bug:** on the
+    first attempt Claude *escalated* the trivial fix (conf 0.95), reasoning
+    "the fix touches a non-test source file → local policy blocks it → needs a
+    human." It over-generalized the LOCAL model's test-only restriction to
+    itself. Root cause: the retry prompt carried the prior "rejected: touches
+    non-test file" reason forward and said "propose something DIFFERENT or
+    escalate." Fixed `build_fix_action_prompt`'s `prior_attempt` block to state
+    that the higher tier MAY edit source files and must not escalate merely
+    because a fix touches non-test source (regression test in
+    test_auto_fix_pure.py). Re-run after the fix → `fixed`.
+- **Open follow-ups for `replace_file`:** (a) very large files — returning the
+  whole file is wasteful; function-level replacement is a possible future
+  refinement (currently full-file only). (b) Could exercise it against a REAL
+  commander-builder source bug (the rf-dogfood repo is synthetic);
+  commander-builder isn't pip-installed in this venv right now.
 - The FP-002 data-gen scripts here (`generate_sameprocess.py`, `train_fp002.py`)
   belong to commander-builder's FP-002 effort — see that repo's handoff;
   conclusion there: kept-vs-reverted is not viable via the curator+Forge sim.
