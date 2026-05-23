@@ -30,7 +30,7 @@ subscription, rate-limited not per-token) for the hard cases.
 - **Venv:** `.venv` (Python 3.12). To run against commander-builder, also
   `pip install -e C:\dev\commander-builder` into this venv.
 - **Published:** https://github.com/LlamaAdam/commander-orchestrator (MIT;
-  GitHub Actions CI runs the offline 141-test suite on push/PR). `main` tracks
+  GitHub Actions CI runs the offline 158-test suite on push/PR). `main` tracks
   `origin/main`. `data/` runtime is gitignored.
 - **Target repo:** `C:\dev\commander-builder`; the fix loop reads `--repo-dir`
   (junction `data/repos/commander-builder` or pass the path directly).
@@ -91,10 +91,14 @@ auto_fix_attempt / idle_streak).
    `tests/test_auto_fix_gitops.py`.)
 4. **Don't edit orchestrator source while a run is in flight** — fresh
    subprocesses re-import it mid-run.
+5. **Never weaken a test to make the suite green.** `check_no_test_weakening`
+   refuses+reverts+escalates any fix that removes assertions or adds skip/xfail
+   in a touched TEST file (vs HEAD). Enforced before the pytest verify; covers
+   apply_diff and replace_file. (Guarded by `tests/test_auto_fix_{pure,gitops,tiers}.py`.)
 
 ## Tests
 
-`.venv\Scripts\python -m pytest` → **141 passing**, offline (no Ollama/Claude/
+`.venv\Scripts\python -m pytest` → **158 passing**, offline (no Ollama/Claude/
 network/Forge; all seams stubbed). See `tests/README.md`. Modules covered:
 quota, triage, router, auto_fix (pure/tiers/gitops), report, claude_cli (incl.
 the billing invariant), harness runner+bundle+clone, status, local_model, cli.
@@ -130,9 +134,28 @@ the billing invariant), harness runner+bundle+clone, status, local_model, cli.
   opt-in via `--poll-head`); `--stop-when-idle N` exits after N idle cycles.
   VALIDATED: a `--hours 12 --stop-when-idle 2` run fixed tier-1 then stopped
   itself after 3 cycles (~23min), not 12h.
-- **128 → 130 → 140 → 141 tests** (apply_diff fence + headerless-hunk repair;
-  then +10 for `replace_file`: parse, apply guards, end-to-end tier-2
-  fix/revert; then +1 for the tier-2 retry-prompt fix found by the live dogfood).
+- **128 → 130 → 141 → 158 tests** (apply_diff fence/headerless repair;
+  +11 for `replace_file` + tier-2 retry-prompt fix; +17 for the 3 post-dogfood
+  fixes below).
+- **3 POST-DOGFOOD FIXES (2026-05-22), all merged to `main`:**
+  1. **status falsely reported Ollama unreachable** ("requests library not
+     installed") while local calls worked — `status._check_ollama` used
+     `requests` (not a dep); now delegates to `local_model.list_models`/`ping`
+     (httpx, the real client).
+  2. **`needs_human.md` was append-only + never cleared** → `orch pending`
+     grew unboundedly with stale already-fixed entries. Now backed by
+     `data/needs_human.json` keyed by nodeid: one entry/test (escalation_count),
+     `resolve_needs_human` clears it when the test passes (wired into
+     fixed/already_fixed), .md rendered open-only ("N open, M resolved"), legacy
+     .md archived to `needs_human.archive.md`.
+  3. **Auto-fix could weaken a test** (local may edit test files; auto-commits
+     on green) → `check_no_test_weakening` refuses+reverts+escalates if a
+     touched TEST file loses assertions or gains skip/xfail vs HEAD (runs before
+     pytest; now covers both apply_diff and replace_file).
+- **REAL-TARGET DOGFOOD PASSED:** seeded the `_verdict_from_ab` sign-flip on a
+  scratch commander-builder branch → tier-2 Claude fixed it (apply_diff landed
+  cleanly), 2nd failure already_fixed, no regressions, cleaned up. Green suite
+  (1287) correctly no-ops. commander-builder is now pip-installed in the venv.
 - **Handoffs split** (this file + commander-builder/docs/HANDOFF.md) to end
   the two-program confusion.
 
@@ -163,11 +186,16 @@ the billing invariant), harness runner+bundle+clone, status, local_model, cli.
     that the higher tier MAY edit source files and must not escalate merely
     because a fix touches non-test source (regression test in
     test_auto_fix_pure.py). Re-run after the fix → `fixed`.
-- **Open follow-ups for `replace_file`:** (a) very large files — returning the
-  whole file is wasteful; function-level replacement is a possible future
-  refinement (currently full-file only). (b) Could exercise it against a REAL
-  commander-builder source bug (the rf-dogfood repo is synthetic);
-  commander-builder isn't pip-installed in this venv right now.
+  Both the synthetic (rf-dogfood) and a REAL commander-builder source bug have
+  now been fixed end-to-end via tier-2.
+- **READY TO RUN:** `main` now integrates `replace_file` + the 3 post-dogfood
+  fixes (158 tests). commander-builder is pip-installed in the venv. Good for
+  supervised runs now (`orch fix --repo-dir C:\dev\commander-builder`); watch
+  the first handful before unattended `run_continuous` sessions.
+- **Open follow-ups:** (a) `replace_file` is full-file only — function-level
+  replacement is a possible refinement for very large files. (b) Report
+  success-rate is polluted by old/dogfood tar-pit attempts; self-corrects as
+  real runs accrue.
 - The FP-002 data-gen scripts here (`generate_sameprocess.py`, `train_fp002.py`)
   belong to commander-builder's FP-002 effort — see that repo's handoff;
   conclusion there: kept-vs-reverted is not viable via the curator+Forge sim.
