@@ -6,7 +6,8 @@ For each TestFailure:
   3. Route via existing Router (uses your local/claude rules + quota).
   4. Parse the action JSON.
   5. Danger-list check on touched files. Match -> escalate.
-  6. Apply: pip install OR git apply (on auto-fix/<ts> branch).
+  6. Apply: pip install OR full-file overwrite (replace_file) OR git apply
+     (apply_diff) -- the latter two on an auto-fix/<ts> branch.
   7. Verify: re-run fast lane; if better -> keep, if regressed -> revert.
   8. Anything we can't handle goes to data/needs_human.md.
 
@@ -93,18 +94,20 @@ LONG_DEDUP_SECONDS = 7 * 24 * 3600
 # to local-only auto-apply (verification is skipped thereafter to save Claude
 # calls). State persists in data/graduation_state.json.
 VERIFY_GRADUATION_THRESHOLD = 10
-GRADUATABLE_ACTIONS = ("install_package", "apply_diff")
+GRADUATABLE_ACTIONS = ("install_package", "apply_diff", "replace_file")
 
 
 # --- data classes -----------------------------------------------------------
 
 @dataclass
 class FixAction:
-    action: str  # "install_package" | "apply_diff" | "escalate" | "no_action"
+    action: str  # "install_package" | "apply_diff" | "replace_file" | "escalate" | "no_action"
     confidence: float = 0.0
     reasoning: str = ""
     package: str = ""
     diff: str = ""
+    path: str = ""  # only for replace_file: the single file to overwrite
+    new_content: str = ""  # only for replace_file: the COMPLETE corrected file
     files_touched: List[str] = field(default_factory=list)
     escalate_reason: str = ""
     raw_response: str = ""
@@ -192,10 +195,12 @@ def build_fix_action_prompt(bundle: FailureBundle, *, prior_attempt: str = "") -
         "Choose ONE action and return strict JSON matching this schema:\n\n"
         "```json\n"
         "{\n"
-        '  "action": "install_package" | "apply_diff" | "escalate",\n'
+        '  "action": "install_package" | "replace_file" | "apply_diff" | "escalate",\n'
         '  "confidence": 0.0 to 1.0,\n'
         '  "reasoning": "one short sentence",\n'
         '  "package": "<pip spec>"  // only for install_package, e.g. "flask" or "commander-builder[web]"\n'
+        '  "path": "path/to/file.py",  // only for replace_file -- the single file to overwrite\n'
+        '  "new_content": "<COMPLETE corrected file>",  // only for replace_file -- the ENTIRE file, not a snippet\n'
         '  "diff": "<unified diff text>",  // only for apply_diff -- minimal patch against affected file(s)\n'
         '  "files_touched": ["path/to/file.py"],  // only for apply_diff\n'
         '  "escalate_reason": "<why human or Claude is needed>"  // only for escalate\n'
@@ -205,8 +210,14 @@ def build_fix_action_prompt(bundle: FailureBundle, *, prior_attempt: str = "") -
         "- Output ONLY the JSON. No prose before or after.\n"
         "- If the failure is a missing module and the error message tells you "
         "what to install, use `install_package`.\n"
-        "- If you can write a small unified diff that fixes the issue, use "
-        "`apply_diff` and include all touched files in `files_touched`.\n"
+        "- To CHANGE CODE, PREFER `replace_file`: pick the ONE file to fix via "
+        "`path` and return its COMPLETE corrected contents in `new_content` "
+        "(the whole file from first line to last, with your fix applied -- not "
+        "a diff, snippet, or ellipsis). This is the most reliable way to land a "
+        "fix; use it whenever a single file needs editing.\n"
+        "- Use `apply_diff` only when a unified diff is genuinely clearer (e.g. "
+        "a tiny change to a very large file); include all touched files in "
+        "`files_touched`.\n"
         "- If you are not confident (less than 0.7) OR you would need to "
         "modify config files / secrets / migrations / CI / auth code, use "
         "`escalate`.\n"
@@ -216,8 +227,20 @@ def build_fix_action_prompt(bundle: FailureBundle, *, prior_attempt: str = "") -
         suffix += (
             "\n## PRIOR ATTEMPT (this failure has already been tried)\n"
             f"{prior_attempt}\n"
-            "Propose something DIFFERENT from the prior attempt. If you cannot "
-            "improve on it, respond with `escalate`.\n"
+            "\nYou are a MORE CAPABLE model operating at a HIGHER TRUST TIER "
+            "than whatever made the prior attempt. You ARE allowed to edit "
+            "SOURCE files, not just tests -- anything except config / secrets / "
+            "migrations / CI / auth code (those still escalate).\n"
+            "- If the prior attempt was escalated ONLY because the previous "
+            "model is restricted to test files, that restriction does NOT apply "
+            "to you: implement the real fix in the source file. Do NOT escalate "
+            "merely because the fix touches a non-test source file -- prefer "
+            "`replace_file` with the COMPLETE corrected file.\n"
+            "- If the prior attempt's edit FAILED to apply or REGRESSED tests, "
+            "propose a corrected fix (e.g. switch `apply_diff` -> "
+            "`replace_file`).\n"
+            "- Escalate only when a human is genuinely required (the fix needs a "
+            "forbidden path, or you cannot determine a safe fix).\n"
         )
     return base + suffix
 
@@ -236,6 +259,11 @@ def _format_prior_attempt(action: FixAction, outcome: str, error: str = "") -> s
             lines.append(f"- files touched: {', '.join(action.files_touched)}")
         if action.diff:
             lines.append(f"- diff (first 400 chars):\n```\n{action.diff[:400]}\n```")
+    if action.action == "replace_file":
+        if action.path:
+            lines.append(f"- file replaced: `{action.path}`")
+        if action.new_content:
+            lines.append(f"- new content (first 400 chars):\n```\n{action.new_content[:400]}\n```")
     lines.append(f"- outcome: **{outcome}**")
     if error:
         lines.append(f"- error: {error[:300]}")
@@ -282,10 +310,18 @@ def parse_fix_action(response_text: str) -> FixAction:
                          raw_response=raw[:2000])
 
     action = str(payload.get("action", "")).strip().lower()
-    if action not in ("install_package", "apply_diff", "escalate", "no_action"):
+    if action not in ("install_package", "apply_diff", "replace_file", "escalate", "no_action"):
         return FixAction(action="escalate", confidence=0.0,
                          escalate_reason=f"unknown action: {action!r}",
                          raw_response=raw[:2000])
+
+    path = str(payload.get("path", "") or "").strip()
+    files_touched = [str(x) for x in (payload.get("files_touched") or [])]
+    # replace_file targets a single `path`; mirror it into files_touched so the
+    # danger/local-scope gates, branch creation, commit, and revert machinery
+    # (all keyed off files_touched) work without special-casing.
+    if action == "replace_file" and path and not files_touched:
+        files_touched = [path]
 
     return FixAction(
         action=action,
@@ -293,7 +329,9 @@ def parse_fix_action(response_text: str) -> FixAction:
         reasoning=str(payload.get("reasoning", "") or ""),
         package=str(payload.get("package", "") or "").strip(),
         diff=str(payload.get("diff", "") or ""),
-        files_touched=[str(x) for x in (payload.get("files_touched") or [])],
+        path=path,
+        new_content=str(payload.get("new_content", "") or ""),
+        files_touched=files_touched,
         escalate_reason=str(payload.get("escalate_reason", "") or ""),
         raw_response=raw[:2000],
     )
@@ -406,6 +444,52 @@ def apply_diff(diff_text: str, repo_dir: Path, timeout: int = 60) -> ApplyResult
             patch_path.unlink()
         except OSError:
             pass
+
+
+def _resolve_in_repo(path: str, repo_dir: Path) -> Optional[Path]:
+    """Resolve `path` (repo-relative or absolute) and confirm it stays inside
+    `repo_dir`. Returns the resolved path, or None on traversal/escape.
+
+    This is the safety boundary for replace_file: a model-supplied path must
+    never let us write outside the target repo."""
+    if not path or not str(path).strip():
+        return None
+    repo_root = Path(repo_dir).resolve()
+    candidate = Path(path)
+    resolved = (candidate if candidate.is_absolute() else repo_root / candidate).resolve()
+    try:
+        resolved.relative_to(repo_root)
+    except ValueError:
+        return None
+    return resolved
+
+
+def apply_replace_file(path: str, new_content: str, repo_dir: Path) -> ApplyResult:
+    """Overwrite a single existing file with the model's COMPLETE corrected
+    contents. No git apply, hunk headers, line numbers, or context matching --
+    this sidesteps the unified-diff tar pit for source fixes.
+
+    Guards: the path must resolve INSIDE repo_dir (no traversal), the target
+    file must already exist (we replace, never scatter new files), and the
+    content must be non-empty. Line endings are normalized to LF and a trailing
+    newline is guaranteed."""
+    target = _resolve_in_repo(path, repo_dir)
+    if target is None:
+        return ApplyResult(success=False,
+                           error=f"path escapes repo or is empty: {path!r}")
+    if not target.is_file():
+        return ApplyResult(success=False,
+                           error=f"target file does not exist: {path!r} (replace_file overwrites only existing files)")
+    if not (new_content or "").strip():
+        return ApplyResult(success=False, error="empty new_content -- refusing to blank out a file")
+    content = new_content.replace("\r\n", "\n").replace("\r", "\n")
+    if not content.endswith("\n"):
+        content += "\n"
+    try:
+        target.write_text(content, encoding="utf-8", newline="\n")
+    except OSError as e:
+        return ApplyResult(success=False, error=f"write failed: {e}")
+    return ApplyResult(success=True)
 
 
 # --- branch lifecycle -------------------------------------------------------
@@ -564,6 +648,9 @@ def build_verify_prompt(bundle: FailureBundle, action: FixAction) -> str:
     elif action.action == "apply_diff":
         parts.append(f"- files: {', '.join(action.files_touched)}")
         parts.append(f"- diff:\n```\n{action.diff[:1500]}\n```")
+    elif action.action == "replace_file":
+        parts.append(f"- file: `{action.path}`")
+        parts.append(f"- proposed full contents:\n```\n{action.new_content[:1500]}\n```")
     parts += [
         "",
         "Respond with JSON ONLY: {\"approve\": true|false, \"reason\": \"one short sentence\"}",
@@ -702,25 +789,26 @@ def _try_action(
         return _done(status="escalated", action=action,
                      reason=f"low confidence or escalate ({action.confidence:.2f})")
 
-    # Danger list applies to apply_diff only. install_package is validated via
+    # File-touching actions (apply_diff, replace_file) are gated identically:
+    # danger-list + local-only test-file scope. install_package is validated via
     # _safe_package_spec; pip install is bounded and reversible.
-    if action.action == "apply_diff":
+    if action.action in ("apply_diff", "replace_file"):
         touched = list(action.files_touched)
         if any(is_danger_path(p, danger_patterns) for p in touched):
             return _done(status="escalated", action=action,
-                         reason="diff touches danger-listed path")
+                         reason=f"{action.action} touches danger-listed path")
 
-        # Local-only scope: the small local model can only diff test files.
+        # Local-only scope: the small local model can only edit test files.
         # Anything else escalates so tier 2 (Claude) can take the shot.
         if tr.handler == "local" and touched:
             non_test = [p for p in touched if not _is_test_file(p)]
             if non_test:
                 return _done(status="escalated", action=action,
-                             reason=f"local diff touches non-test file(s) {non_test[:2]} -- escalating to Claude")
-        # If files_touched is empty, the diff is unreviewable -- escalate.
+                             reason=f"local {action.action} touches non-test file(s) {non_test[:2]} -- escalating to Claude")
+        # If files_touched is empty, the edit is unreviewable -- escalate.
         if tr.handler == "local" and not touched:
             return _done(status="escalated", action=action,
-                         reason="local apply_diff with empty files_touched -- escalating")
+                         reason=f"local {action.action} with empty files_touched -- escalating")
 
     if dry_run:
         return _done(status="would_apply", action=action)
@@ -744,9 +832,10 @@ def _try_action(
         # (verification is a safety net, not a hard gate).
 
     branch_name = f"auto-fix/{int(time.time())}-{_dedup_hash(failure)}"
-    touched_files = list(action.files_touched) if action.action == "apply_diff" else []
+    file_action = action.action in ("apply_diff", "replace_file")
+    touched_files = list(action.files_touched) if file_action else []
 
-    if action.action == "apply_diff":
+    if file_action:
         br = create_working_branch(repo_dir, branch_name, target_files=touched_files)
         if not br.success:
             return _done(status="error", action=action, branch=branch_name,
@@ -756,11 +845,13 @@ def _try_action(
         ar = apply_install_package(action.package, python_exe=python_exe)
     elif action.action == "apply_diff":
         ar = apply_diff(action.diff, repo_dir)
+    elif action.action == "replace_file":
+        ar = apply_replace_file(action.path, action.new_content, repo_dir)
     else:
         ar = ApplyResult(success=False, error=f"unhandled action {action.action!r}")
 
     if not ar.success:
-        if action.action == "apply_diff":
+        if file_action:
             revert_files(repo_dir, touched_files, orig_branch)
         return _done(status="apply_failed", action=action, branch=branch_name,
                      reason=ar.error)
@@ -770,7 +861,7 @@ def _try_action(
 
     if after_fail < baseline_fail:
         commit_note = ""
-        if action.action == "apply_diff":
+        if file_action:
             cr = commit_files(repo_dir, f"auto-fix: {failure.nodeid}", touched_files)
             if not cr.success:
                 # The fix works (tests pass) but didn't land as a commit. Don't
@@ -786,7 +877,7 @@ def _try_action(
                      baseline_fail_count=baseline_fail, after_fail_count=after_fail,
                      reason=commit_note)
 
-    if action.action == "apply_diff":
+    if file_action:
         revert_files(repo_dir, touched_files, orig_branch)
     return _done(status="regressed", action=action, branch=branch_name,
                  baseline_fail_count=baseline_fail, after_fail_count=after_fail,
@@ -958,6 +1049,9 @@ def _log_attempt_event(events_path: Path, attempt: FixAttempt) -> None:
             payload["package"] = attempt.action.package
         if attempt.action.action == "apply_diff":
             payload["files_touched"] = attempt.action.files_touched
+        if attempt.action.action == "replace_file":
+            payload["files_touched"] = attempt.action.files_touched
+            payload["path"] = attempt.action.path
     with events_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(payload, default=str) + "\n")
 

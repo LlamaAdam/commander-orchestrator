@@ -29,6 +29,12 @@ def _escalate_action():
                        "escalate_reason": "no idea"})
 
 
+def _replace_file_action(path, new_content, conf=0.9):
+    return json.dumps({"action": "replace_file", "confidence": conf,
+                       "reasoning": "rewrite the buggy file",
+                       "path": path, "new_content": new_content})
+
+
 class FakeRouter:
     def __init__(self, *, handle, claude=None, blocked=False):
         self._handle = handle
@@ -120,6 +126,52 @@ def test_dry_run_reports_would_apply_without_applying(tmp_path, stub_seams):
                               router=router, dry_run=True)
     assert attempt.status == "would_apply"
     assert attempt.action.action == "install_package"
+
+
+def test_tier2_replace_file_fixes_source(git_repo, monkeypatch):
+    """The diff-tar-pit sidestep, end to end: local escalates a source bug,
+    tier-2 Claude returns the COMPLETE corrected file via replace_file, it is
+    written directly (no git apply), pytest improves -> fixed and committed on
+    an auto-fix branch."""
+    monkeypatch.setattr(af, "bundle_failure", lambda failure, repo_dir: make_bundle())
+    results = [_pytest_result(n_failed=1), _pytest_result(n_failed=0)]
+    monkeypatch.setattr(af, "run_pytest", lambda repo_dir, lane="fast": results.pop(0))
+
+    router = FakeRouter(
+        handle=TaskResult(success=True, handler="local", text=_escalate_action()),
+        claude=TaskResult(success=True, handler="claude",
+                          text=_replace_file_action("src.py", "x = 2  # corrected\n")),
+    )
+    attempt = af.auto_fix_one(make_failure(), git_repo, project_root=git_repo, router=router)
+
+    assert attempt.status == "fixed", attempt.reason
+    assert attempt.claude_retry_used is True
+    assert attempt.action.action == "replace_file"
+    # The file holds the full corrected contents.
+    assert (git_repo / "src.py").read_text(encoding="utf-8") == "x = 2  # corrected\n"
+    # And it landed as a commit (HEAD touches src.py on the auto-fix branch).
+    log = af._git(["show", "--name-only", "--format=", "HEAD"], cwd=git_repo).stdout
+    assert "src.py" in log
+
+
+def test_replace_file_regression_is_reverted(git_repo, monkeypatch):
+    """If the rewrite does NOT reduce failures, the patched file is reverted to
+    its committed state (WIP-safe) and the attempt is recorded as regressed."""
+    monkeypatch.setattr(af, "bundle_failure", lambda failure, repo_dir: make_bundle())
+    # baseline=1, after-apply still 1 -> no improvement -> regressed/reverted.
+    results = [_pytest_result(n_failed=1), _pytest_result(n_failed=1)]
+    monkeypatch.setattr(af, "run_pytest", lambda repo_dir, lane="fast": results.pop(0))
+
+    router = FakeRouter(
+        handle=TaskResult(success=True, handler="claude",  # claude-handled: no tier-2 retry
+                          text=_replace_file_action("src.py", "x = 999  # wrong\n")),
+    )
+    attempt = af.auto_fix_one(make_failure(), git_repo, project_root=git_repo, router=router)
+
+    assert attempt.status == "regressed"
+    # Reverted: src.py is back to its committed content, on the original branch.
+    assert (git_repo / "src.py").read_text(encoding="utf-8") == "x = 1\n"
+    assert af.current_branch(git_repo) == "main"
 
 
 def test_tier3_cap_skips_without_attempting(tmp_path, monkeypatch):

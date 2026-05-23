@@ -206,6 +206,8 @@ def _cmd_fix(args):
             line += f"  action={a.action.action}"
             if a.action.action == "install_package" and a.action.package:
                 line += f"  pkg={a.action.package}"
+            if a.action.action == "replace_file" and a.action.path:
+                line += f"  file={a.action.path}"
         if a.reason:
             line += f"  ({a.reason[:60]})"
         print(line)

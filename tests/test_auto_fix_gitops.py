@@ -168,6 +168,53 @@ def test_apply_diff_failure_includes_preview(git_repo):
     assert "diff preview:" in res.error
 
 
+# --- replace_file (the diff-tar-pit sidestep) -------------------------------
+
+def test_apply_replace_file_overwrites_existing(git_repo):
+    res = af.apply_replace_file("src.py", "x = 2  # fixed", git_repo)
+    assert res.success, res.error
+    # Content written, with a trailing newline guaranteed.
+    assert (git_repo / "src.py").read_text(encoding="utf-8") == "x = 2  # fixed\n"
+
+
+def test_apply_replace_file_normalizes_crlf(git_repo):
+    af.apply_replace_file("src.py", "a = 1\r\nb = 2\r\n", git_repo)
+    assert (git_repo / "src.py").read_text(encoding="utf-8") == "a = 1\nb = 2\n"
+
+
+def test_apply_replace_file_refuses_missing_file(git_repo):
+    res = af.apply_replace_file("does/not/exist.py", "x = 1", git_repo)
+    assert res.success is False
+    assert "does not exist" in res.error
+    # Nothing scattered into the repo.
+    assert not (git_repo / "does").exists()
+
+
+def test_apply_replace_file_refuses_empty_content(git_repo):
+    res = af.apply_replace_file("src.py", "   \n  ", git_repo)
+    assert res.success is False
+    assert "empty" in res.error
+    # Original file untouched.
+    assert (git_repo / "src.py").read_text(encoding="utf-8") == "x = 1\n"
+
+
+def test_apply_replace_file_refuses_path_traversal(git_repo):
+    outside = git_repo.parent / "victim.txt"
+    outside.write_text("precious\n", encoding="utf-8")
+    res = af.apply_replace_file("../victim.txt", "HACKED", git_repo)
+    assert res.success is False
+    assert "escapes repo" in res.error
+    # The file outside the repo was NOT touched.
+    assert outside.read_text(encoding="utf-8") == "precious\n"
+
+
+def test_resolve_in_repo_accepts_inside_rejects_outside(git_repo):
+    inside = af._resolve_in_repo("src.py", git_repo)
+    assert inside is not None and inside.name == "src.py"
+    assert af._resolve_in_repo("../escape.py", git_repo) is None
+    assert af._resolve_in_repo("", git_repo) is None
+
+
 def test_revert_files_restores_target_and_preserves_wip(git_repo):
     af.create_working_branch(git_repo, "auto/fix")
     # A failed "patch" to src.py (uncommitted) + a user's untracked WIP file.
