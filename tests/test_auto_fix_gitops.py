@@ -215,6 +215,22 @@ def test_resolve_in_repo_accepts_inside_rejects_outside(git_repo):
     assert af._resolve_in_repo("", git_repo) is None
 
 
+def test_check_no_test_weakening_against_committed(git_repo):
+    # git_repo ships tests/test_x.py = "def test_x():\n    assert True\n".
+    # Unchanged working tree -> no weakening.
+    assert af.check_no_test_weakening(git_repo, ["tests/test_x.py"]) == ""
+    # Gut the assertion in the working tree -> flagged vs the committed version.
+    (git_repo / "tests" / "test_x.py").write_text("def test_x():\n    pass\n", encoding="utf-8")
+    reason = af.check_no_test_weakening(git_repo, ["tests/test_x.py"])
+    assert "assertions removed" in reason
+
+
+def test_check_no_test_weakening_ignores_source_files(git_repo):
+    # src.py is NOT a test file -> never checked, even if assertions vanish.
+    (git_repo / "src.py").write_text("x = 1\n", encoding="utf-8")
+    assert af.check_no_test_weakening(git_repo, ["src.py"]) == ""
+
+
 def test_revert_files_restores_target_and_preserves_wip(git_repo):
     af.create_working_branch(git_repo, "auto/fix")
     # A failed "patch" to src.py (uncommitted) + a user's untracked WIP file.
