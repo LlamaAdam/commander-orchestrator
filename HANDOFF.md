@@ -30,8 +30,13 @@ subscription, rate-limited not per-token) for the hard cases.
 - **Venv:** `.venv` (Python 3.12). To run against commander-builder, also
   `pip install -e C:\dev\commander-builder` into this venv.
 - **Published:** https://github.com/LlamaAdam/commander-orchestrator (MIT;
-  GitHub Actions CI runs the offline 158-test suite on push/PR). `main` tracks
-  `origin/main`. `data/` runtime is gitignored.
+  GitHub Actions CI runs ruff + the offline 167-test suite on push/PR). `main`
+  tracks `origin/main`. `data/` runtime is gitignored.
+- **Preflight audit:** `run_continuous` auto-runs `orchestrator.audit.run_audit`
+  at start (aborts on a hard FAIL like missing Claude CLI / target repo;
+  surfaces backlog). Run standalone via `orch audit [--deep]`. Bug #5 (LLM diff
+  application) is RESOLVED via the `replace_file` action (full-file overwrite),
+  confirmed landing a source fix end-to-end.
 - **Target repo:** `C:\dev\commander-builder`; the fix loop reads `--repo-dir`
   (junction `data/repos/commander-builder` or pass the path directly).
 
@@ -39,6 +44,7 @@ subscription, rate-limited not per-token) for the hard cases.
 
 ```powershell
 # from this dir, using the venv python
+.venv\Scripts\python -m orchestrator.cli audit --deep --repo-dir C:\dev\commander-builder  # PREFLIGHT: subsystems + bug/backlog
 .venv\Scripts\python -m orchestrator.cli status      # Ollama + quota + event summary
 .venv\Scripts\python -m orchestrator.cli report      # roll-up: fix rate, tier split, spend
 .venv\Scripts\python -m orchestrator.cli fix --dry-run   # collect failures + plan, no apply
