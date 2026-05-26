@@ -24,9 +24,9 @@ import re
 import subprocess
 import sys
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import List, Optional
 
 from .harness import TestFailure, bundle_failure, run_pytest
 from .harness.failure import FailureBundle
@@ -187,7 +187,6 @@ def save_seen(path: Path, seen: dict) -> None:
 # --- prompt + parse ---------------------------------------------------------
 
 def build_fix_action_prompt(bundle: FailureBundle, *, prior_attempt: str = "") -> str:
-    f = bundle.failure
     base = bundle.prompt  # reuse the existing diagnose-style bundle
     suffix = (
         "\n\n---\n\n"

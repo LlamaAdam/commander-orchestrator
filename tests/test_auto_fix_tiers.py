@@ -119,8 +119,8 @@ def test_tier2_skipped_when_quota_blocked(tmp_path, stub_seams):
 
 
 def test_dry_run_reports_would_apply_without_applying(tmp_path, stub_seams):
-    # dry_run skips baseline pytest entirely; no apply happens.
-    monkeypatch_marker = stub_seams  # results stay empty -> run_pytest must NOT be called
+    # dry_run skips baseline pytest entirely; stub_seams keeps run_pytest's
+    # result queue empty so a stray call would IndexError -- proving none happens.
     router = FakeRouter(handle=TaskResult(success=True, handler="local", text=_install_action()))
     attempt = af.auto_fix_one(make_failure(), tmp_path, project_root=tmp_path,
                               router=router, dry_run=True)

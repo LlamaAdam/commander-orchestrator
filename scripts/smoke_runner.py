@@ -27,7 +27,6 @@ PROJECT_ROOT = HERE.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from orchestrator.harness.runner import (  # noqa: E402
-    TestRunResult,
     parse_junit_xml,
     run_pytest,
 )

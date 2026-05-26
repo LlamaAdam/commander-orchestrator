@@ -12,7 +12,6 @@ Run: python scripts/smoke_verify_graduate.py
 
 from __future__ import annotations
 
-import json
 import sys
 import tempfile
 import types

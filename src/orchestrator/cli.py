@@ -17,7 +17,6 @@ import sys
 import time
 from dataclasses import asdict
 from pathlib import Path
-from typing import Optional
 
 
 def _cmd_status(args):
@@ -33,7 +32,7 @@ def _cmd_status(args):
 def _cmd_health(args):
     from .health import generate_health_report
     if args.dry_run:
-        print(f"[health] dry-run -- building prompt only, no Claude call")
+        print("[health] dry-run -- building prompt only, no Claude call")
     else:
         print(f"[health] reviewing last {args.max_events} events with model={args.model}...")
     report = generate_health_report(
@@ -79,11 +78,13 @@ def _cmd_events_tail(args):
                 lines.append(line.rstrip())
     for line in lines[-args.n:]:
         if args.json:
-            print(line); continue
+            print(line)
+            continue
         try:
             ev = json.loads(line)
         except json.JSONDecodeError:
-            print(line); continue
+            print(line)
+            continue
         ts = ev.get("timestamp")
         when = (time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts))
                 if isinstance(ts, (int, float)) else "?")
@@ -131,7 +132,6 @@ def _cmd_triage(args):
 
 def _cmd_fix(args):
     """Autonomous fix loop: bundle -> route -> JSON action -> apply -> verify."""
-    from .triage_failures import triage_failures  # to reuse clone+test step
     from .auto_fix import auto_fix_failures, load_danger_list
     from .router import Router
     from .harness import run_pytest

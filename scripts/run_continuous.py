@@ -30,9 +30,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
-import os
 import re
-import signal
 import subprocess
 import sys
 import time
@@ -211,7 +209,7 @@ def main() -> int:
     end_time = time.time() + args.hours * 3600
 
     _log("=" * 68, log_file)
-    _log(f"continuous run starting", log_file)
+    _log("continuous run starting", log_file)
     _log(f"  hours:         {args.hours}", log_file)
     _log(f"  interval:      {args.interval}s", log_file)
     _log(f"  repo_dir:      {repo_dir}", log_file)
@@ -271,8 +269,8 @@ def main() -> int:
                 _log(f"fix exit code: {rc}", log_file)
                 if rc == 2:
                     burn_stopped = True
-                    _log(f"burn ceiling tripped -- pausing remaining cycles "
-                         f"for the next 2h", log_file)
+                    _log("burn ceiling tripped -- pausing remaining cycles "
+                         "for the next 2h", log_file)
                     # Sleep extra to let the day's reported burn naturally roll
                     # off via your existing quota.py rate-limit mechanics.
                     time.sleep(7200)
@@ -303,9 +301,9 @@ def main() -> int:
                         banner = "=" * 68
                         _log(banner, log_file)
                         _log(f"  [IDLE] No useful fix work in {idle_streak} consecutive cycles.", log_file)
-                        _log(f"  Everything fixable is fixed; remaining failures are dedup/cap-skipped.", log_file)
-                        _log(f"  Add failing tests or push a commit to exercise the loop.", log_file)
-                        _log(f"  Will not repeat this banner until a non-idle cycle.", log_file)
+                        _log("  Everything fixable is fixed; remaining failures are dedup/cap-skipped.", log_file)
+                        _log("  Add failing tests or push a commit to exercise the loop.", log_file)
+                        _log("  Will not repeat this banner until a non-idle cycle.", log_file)
                         _log(banner, log_file)
                         idle_banner_shown = True
                 else:

@@ -140,7 +140,7 @@ def case_1_local_fixes_directly():
     assert attempt.handler == "local"
     assert attempt.claude_retry_used is False
     assert calls["handle"] == 1 and calls["claude"] == 0
-    print(f"  case 1 PASS: local fixed directly, no Claude retry")
+    print("  case 1 PASS: local fixed directly, no Claude retry")
 
 
 def case_2_local_bad_package_then_claude_rescues():
@@ -206,7 +206,7 @@ def case_4_quota_blocked_no_retry():
     assert attempt.handler == "local"
     assert attempt.claude_retry_used is False
     assert calls["claude"] == 0, "Claude was blocked, should not have been called"
-    print(f"  case 4 PASS: quota-blocked Claude correctly skipped")
+    print("  case 4 PASS: quota-blocked Claude correctly skipped")
 
 
 def case_5_retry_disabled():
@@ -226,7 +226,7 @@ def case_5_retry_disabled():
     assert attempt.status == "apply_failed", attempt
     assert attempt.claude_retry_used is False
     assert calls["claude"] == 0
-    print(f"  case 5 PASS: retry disabled -> no Claude call")
+    print("  case 5 PASS: retry disabled -> no Claude call")
 
 
 # ---------------------------------------------------------------------------

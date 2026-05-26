@@ -175,7 +175,7 @@ def format_status_human(s: StatusSnapshot) -> str:
     out.append("")
     out.append("[ollama]")
     if s.ollama.reachable:
-        out.append(f"  reachable: yes")
+        out.append("  reachable: yes")
         models = ", ".join(s.ollama.available_models) if s.ollama.available_models else "(none reported)"
         out.append(f"  models:    {models}")
     else:
@@ -192,14 +192,14 @@ def format_status_human(s: StatusSnapshot) -> str:
         out.append(f"  status:            BLOCKED until {unblock_at} "
                    f"({int(s.quota.seconds_until_unblock or 0)}s remaining)")
     else:
-        out.append(f"  status:            clear (not rate-limited)")
+        out.append("  status:            clear (not rate-limited)")
     out.append("")
     out.append("[events]")
     out.append(f"  log:       {s.events_log_path}")
     out.append(f"  total:     {s.events.total_events}")
     out.append(f"  last 24h:  {s.events.last_24h_events}")
     if s.events.by_event:
-        out.append(f"  by type:")
+        out.append("  by type:")
         for ev_type, count in sorted(s.events.by_event.items(), key=lambda x: -x[1]):
             out.append(f"    {ev_type:24s} {count}")
     if s.events.last_event_timestamp:

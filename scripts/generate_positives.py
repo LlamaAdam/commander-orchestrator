@@ -116,7 +116,7 @@ def main() -> int:
     try:
         while time.time() < end_time:
             if args.target_kept is not None and _kept_count() >= args.target_kept:
-                _log(f"target-kept reached -- stopping", log_file)
+                _log("target-kept reached -- stopping", log_file)
                 break
 
             deck_path, bracket = decks[di % len(decks)]

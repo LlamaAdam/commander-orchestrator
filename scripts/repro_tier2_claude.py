@@ -67,7 +67,7 @@ Choose ONE action and return strict JSON matching this schema:
 
 prompt = BUNDLE + SUFFIX + PRIOR
 print(f"[repro] prompt_len = {len(prompt)} chars")
-print(f"[repro] calling run_claude...")
+print("[repro] calling run_claude...")
 r = run_claude(prompt)
 print(f"[repro] success     = {r.success}")
 print(f"[repro] error_type  = {r.error_type}")

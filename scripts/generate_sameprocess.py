@@ -29,7 +29,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import os
 import random
 import re
 import shutil
@@ -137,7 +136,7 @@ def main() -> int:
         print(f"ERROR: no [USER] decks in {deck_dir}", file=sys.stderr)
         return 2
 
-    print(f"same-process generator")
+    print("same-process generator")
     print(f"  repo        : {repo}")
     print(f"  base decks  : {len(base_decks)}")
     print(f"  depths      : {depths}")

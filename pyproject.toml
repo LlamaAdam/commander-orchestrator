@@ -33,6 +33,13 @@ where = ["src"]
 line-length = 100
 target-version = "py311"
 
+[tool.ruff.lint.per-file-ignores]
+# scripts/ and tests/ deliberately sys.path.insert before importing local
+# helpers (E402) and use one-liner setup with semicolons (E702); these are
+# intentional in standalone drivers/harnesses, not the package source.
+"scripts/*" = ["E402", "E702", "F841"]
+"tests/*" = ["E402", "E702"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 # Note: tests/ is the offline unit suite (no Ollama/Claude/network/Forge).

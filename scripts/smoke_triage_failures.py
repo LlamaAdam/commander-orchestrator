@@ -17,7 +17,6 @@ from __future__ import annotations
 import argparse
 import sys
 import tempfile
-from dataclasses import dataclass, field
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -105,7 +104,7 @@ def _synthetic_smoke() -> int:
     )
 
     try:
-        from orchestrator.triage_failures import triage_failures, _safe_nodeid
+        from orchestrator.triage_failures import triage_failures
 
         with tempfile.TemporaryDirectory(prefix="orch_smoke_triage_") as td:
             tdroot = Path(td)
@@ -161,7 +160,7 @@ def _synthetic_smoke() -> int:
             print(f"  routed_to_local:   {result.routed_to_local}")
             print(f"  routed_to_claude:  {result.routed_to_claude}")
             print(f"  duration:          {result.duration_seconds:.2f}s")
-            print(f"  reports:")
+            print("  reports:")
             for tf in result.triaged:
                 print(f"    {Path(tf.markdown_path).name}")
 
@@ -174,7 +173,7 @@ def _synthetic_smoke() -> int:
 
 
 def _real_smoke(repo_dir: Path, lane: str, max_failures: int, claude_model) -> int:
-    print(f"-- real triage pipeline --")
+    print("-- real triage pipeline --")
     print(f"  repo_dir:      {repo_dir}")
     print(f"  lane:          {lane}")
     print(f"  max_failures:  {max_failures}")
