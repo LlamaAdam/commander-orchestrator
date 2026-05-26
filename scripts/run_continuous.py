@@ -199,6 +199,8 @@ def main() -> int:
                     help="exit after N consecutive idle cycles (everything "
                          "fixable is fixed -- no point idling out the full "
                          "--hours). 0 (default) = run the whole window.")
+    ap.add_argument("--no-preflight", action="store_true",
+                    help="skip the start-up subsystem audit (not recommended)")
     args = ap.parse_args()
 
     log_dir = PROJECT_ROOT / args.log_dir
@@ -222,6 +224,24 @@ def main() -> int:
     if not repo_dir.exists():
         _log(f"ERROR: repo_dir does not exist: {repo_dir}", log_file)
         return 1
+
+    # --- Preflight audit: verify subsystems + surface bug/backlog state before
+    # committing to a long run. Aborts on a hard FAIL (e.g. claude CLI missing,
+    # target not a repo). WARNs (e.g. Ollama down) are logged but don't block. ---
+    if not args.no_preflight:
+        try:
+            from orchestrator.audit import run_audit, format_audit
+            report = run_audit(PROJECT_ROOT, repo_dir)
+            for line in format_audit(report).splitlines():
+                _log(line, log_file)
+            if not report.ok:
+                _log("ABORT: preflight found blocker(s); fix them or pass "
+                     "--no-preflight to override.", log_file)
+                return 1
+            _log("preflight OK -- starting run.", log_file)
+        except Exception as exc:  # noqa: BLE001
+            _log(f"WARN: preflight audit errored ({type(exc).__name__}: {exc}); "
+                 f"continuing without it.", log_file)
 
     cycle = 0
     last_head = _git_head(repo_dir)

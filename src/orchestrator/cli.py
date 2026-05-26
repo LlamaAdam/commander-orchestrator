@@ -56,6 +56,17 @@ def _cmd_health(args):
     return 0
 
 
+def _cmd_audit(args):
+    from .audit import run_audit, format_audit
+    report = run_audit(
+        project_root=args.project_root,
+        repo_dir=args.repo_dir,
+        deep=args.deep,
+    )
+    print(format_audit(report))
+    return 0 if report.ok else 1
+
+
 def _cmd_report(args):
     from .report import build_report, format_report
     r = build_report(project_root=args.project_root)
@@ -274,6 +285,12 @@ def build_parser():
     rp = sub.add_parser("report", help="Roll up events.jsonl into activity metrics")
     rp.add_argument("--json", action="store_true")
     rp.set_defaults(func=_cmd_report)
+
+    au = sub.add_parser("audit", help="Preflight: verify subsystems + show bug/backlog state")
+    au.add_argument("--repo-dir", default="data/repos/commander-builder")
+    au.add_argument("--deep", action="store_true",
+                    help="also run the target suite once for a live bug count")
+    au.set_defaults(func=_cmd_audit)
 
     h = sub.add_parser("health", help="Claude self-review of routing")
     h.add_argument("--max-events", type=int, default=100)
