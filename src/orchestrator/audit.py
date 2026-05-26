@@ -54,6 +54,17 @@ class AuditReport:
         return sum(1 for c in self.checks if c.status == FAIL)
 
 
+def _git_lines(args, cwd: Path):
+    """Run a git command in cwd; return stdout lines (empty on any failure)."""
+    import subprocess
+    try:
+        p = subprocess.run(["git", *args], cwd=str(cwd), capture_output=True,
+                           text=True, encoding="utf-8", errors="replace", timeout=20)
+        return p.stdout.splitlines() if p.returncode == 0 else []
+    except (OSError, subprocess.SubprocessError):
+        return []
+
+
 def _count_needs_human(path: Path) -> int:
     """Count escalations in needs_human.md (one '## ' section each)."""
     try:
@@ -155,6 +166,20 @@ def run_audit(
                             f"{repo_dir} is not a git repo -- apply_diff/replace_file need git"))
     else:
         checks.append(Check("target_repo", OK, str(repo_dir)))
+        # Leftover auto-fix/* branches pile up if revert/cleanup is skipped.
+        stale = [b for b in _git_lines(["branch", "--list", "auto-fix/*"], repo_dir)
+                 if b.strip()]
+        if stale:
+            checks.append(Check("stale_branches", WARN if len(stale) > 10 else OK,
+                                f"{len(stale)} leftover auto-fix/* branch(es)"
+                                + (" -- consider pruning" if len(stale) > 10 else "")))
+        # Local branch behind its upstream -> the loop would test stale code.
+        behind = _git_lines(["rev-list", "--count", "HEAD..@{u}"], repo_dir)
+        if behind and behind[0].strip().isdigit():
+            n = int(behind[0].strip())
+            checks.append(Check("repo_freshness", WARN if n else OK,
+                                f"{n} commit(s) behind upstream -- pull first" if n
+                                else "up to date with upstream"))
 
     # --- pytest available (the harness shells out to it) ---
     import importlib.util

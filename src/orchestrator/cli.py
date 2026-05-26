@@ -56,6 +56,40 @@ def _cmd_health(args):
     return 0
 
 
+def _cmd_work(args):
+    from .worklist import scan_worklist, format_worklist
+    w = scan_worklist(args.repo_dir)
+    print(format_worklist(w))
+    return 0
+
+
+def _cmd_selftest(args):
+    """Ping: run the orchestrator's OWN test suite + a preflight audit, and
+    return one health verdict. Use this to check the system still works and
+    flag anything that needs updating."""
+    import subprocess
+    from pathlib import Path as _P
+    from .audit import run_audit, format_audit
+    # Locate the orchestrator repo root (src/orchestrator/__init__.py -> parents[2]).
+    repo_root = _P(__file__).resolve().parents[2]
+    print(f"[selftest] running orchestrator suite in {repo_root} ...")
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q"],
+        cwd=str(repo_root), capture_output=True, text=True,
+        encoding="utf-8", errors="replace",
+    )
+    suite_line = (proc.stdout.strip().splitlines() or ["(no output)"])[-1]
+    suite_ok = proc.returncode == 0
+    print(f"[selftest] suite: {'PASS' if suite_ok else 'FAIL'} -- {suite_line}")
+    print()
+    report = run_audit(project_root=args.project_root, repo_dir=args.repo_dir)
+    print(format_audit(report))
+    ok = suite_ok and report.ok
+    print()
+    print(f"[selftest] SYSTEM {'OK' if ok else 'NEEDS ATTENTION'}")
+    return 0 if ok else 1
+
+
 def _cmd_audit(args):
     from .audit import run_audit, format_audit
     report = run_audit(
@@ -291,6 +325,14 @@ def build_parser():
     au.add_argument("--deep", action="store_true",
                     help="also run the target suite once for a live bug count")
     au.set_defaults(func=_cmd_audit)
+
+    wk = sub.add_parser("work", help="List actionable work: open backlog + FPs + skipped tests")
+    wk.add_argument("--repo-dir", default="data/repos/commander-builder")
+    wk.set_defaults(func=_cmd_work)
+
+    st = sub.add_parser("selftest", help="Ping: run the orchestrator's own suite + audit -> health verdict")
+    st.add_argument("--repo-dir", default="data/repos/commander-builder")
+    st.set_defaults(func=_cmd_selftest)
 
     h = sub.add_parser("health", help="Claude self-review of routing")
     h.add_argument("--max-events", type=int, default=100)

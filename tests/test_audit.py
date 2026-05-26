@@ -108,6 +108,36 @@ def test_backlog_counts(monkeypatch, tmp_path):
     assert "tier-3-capped failures  : 1" in text
 
 
+def test_stale_branches_and_freshness_checks(monkeypatch, tmp_path):
+    proj, repo = _healthy(monkeypatch, tmp_path)
+
+    def fake_git(args, cwd):
+        if args[:2] == ["branch", "--list"]:
+            return [f"  auto-fix/{i}" for i in range(12)]  # >10 -> WARN
+        if args[:1] == ["rev-list"]:
+            return ["3"]  # 3 commits behind upstream
+        return []
+    monkeypatch.setattr(ad, "_git_lines", fake_git)
+
+    r = run_audit(proj, repo)
+    assert _status(r, "stale_branches") == WARN
+    assert _status(r, "repo_freshness") == WARN
+
+
+def test_fresh_repo_no_stale_is_ok(monkeypatch, tmp_path):
+    proj, repo = _healthy(monkeypatch, tmp_path)
+
+    def fake_git(args, cwd):
+        if args[:1] == ["rev-list"]:
+            return ["0"]  # up to date
+        return []  # no auto-fix branches
+    monkeypatch.setattr(ad, "_git_lines", fake_git)
+
+    r = run_audit(proj, repo)
+    assert _status(r, "repo_freshness") == OK
+    assert r.ok is True
+
+
 def test_deep_runs_target_suite(monkeypatch, tmp_path):
     proj, repo = _healthy(monkeypatch, tmp_path)
     fake = SimpleNamespace(n_passed=10, n_failed=2, n_errors=1, n_total=13)
