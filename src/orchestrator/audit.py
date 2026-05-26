@@ -38,6 +38,7 @@ class Check:
 class AuditReport:
     checks: list = field(default_factory=list)
     backlog: dict = field(default_factory=dict)
+    roadmap: object = None  # orchestrator.roadmap.Roadmap | None
 
     @property
     def ok(self) -> bool:
@@ -187,7 +188,12 @@ def run_audit(
     if bugs is not None:
         backlog["failing_tests"] = bugs
 
-    return AuditReport(checks=checks, backlog=backlog)
+    # Target repo's product backlog + FP roadmap (best-effort; empty for repos
+    # without the docs). Surfaced so a run shows bugs + backlog + roadmap together.
+    from .roadmap import scan_roadmap
+    roadmap = scan_roadmap(repo_dir) if repo_dir.exists() else None
+
+    return AuditReport(checks=checks, backlog=backlog, roadmap=roadmap)
 
 
 _GLYPH = {OK: "OK  ", WARN: "WARN", FAIL: "FAIL"}
@@ -204,6 +210,13 @@ def format_audit(r: AuditReport) -> str:
     L.append(f"  tier-3-capped failures  : {b.get('capped_failures', 0)}")
     if "failing_tests" in b:
         L.append(f"  failing tests now       : {b['failing_tests']}")
+    # Target product backlog + FP roadmap (best-effort; omitted if no docs).
+    if r.roadmap is not None and getattr(r.roadmap, "found", False):
+        from .roadmap import format_roadmap
+        roadmap_lines = format_roadmap(r.roadmap)
+        if roadmap_lines:
+            L.append("")
+            L.extend(roadmap_lines)
     L.append("")
     if r.ok:
         verdict = "READY" + (f" (with {r.n_warn} warning(s))" if r.n_warn else "")
