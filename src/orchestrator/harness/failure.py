@@ -20,6 +20,12 @@ from pathlib import Path
 from .runner import TestFailure
 
 
+# Files at/above this size are too big to safely regenerate wholesale with
+# replace_file -- the model can corrupt code outside the fix. The prompt
+# steers such files to apply_diff (a minimal patch, no blast radius) instead.
+LARGE_FILE_CHARS = 8000
+
+
 @dataclass
 class FailureBundle:
     """A self-contained failure context ready to feed to a model."""
@@ -27,6 +33,9 @@ class FailureBundle:
     failure: TestFailure
     test_source: str = ""
     related_sources: dict[str, str] = field(default_factory=dict)
+    # Original (un-truncated) char count per related source, so the prompt can
+    # flag large files and the fixer can prefer apply_diff over replace_file.
+    related_source_sizes: dict[str, int] = field(default_factory=dict)
     prompt: str = ""
 
 
@@ -396,7 +405,19 @@ def bundle_failure(
                 rel_str = str(p.relative_to(repo_dir.resolve()))
             except ValueError:
                 rel_str = str(p)
-            bundle.related_sources[rel_str] = _read_truncated(p, related_source_chars)
+            try:
+                full = p.read_text(encoding="utf-8", errors="replace")
+            except (OSError, UnicodeError):
+                full = ""
+            bundle.related_source_sizes[rel_str] = len(full)
+            if len(full) > related_source_chars:
+                omitted = len(full) - related_source_chars
+                bundle.related_sources[rel_str] = (
+                    full[:related_source_chars]
+                    + f"\n\n# ... truncated ({omitted} more chars) ...\n"
+                )
+            else:
+                bundle.related_sources[rel_str] = full
 
     bundle.prompt = _assemble_prompt(bundle)
     return bundle
@@ -433,9 +454,12 @@ def _assemble_prompt(bundle: FailureBundle) -> str:
         ])
 
     for rel, src in bundle.related_sources.items():
+        size = bundle.related_source_sizes.get(rel, len(src))
+        marker = (f" — {size} chars; LARGE: prefer apply_diff over replace_file"
+                  if size >= LARGE_FILE_CHARS else f" — {size} chars")
         parts.extend([
             "",
-            f"## Related source: `{rel}`",
+            f"## Related source: `{rel}`{marker}",
             "```python",
             src.rstrip(),
             "```",

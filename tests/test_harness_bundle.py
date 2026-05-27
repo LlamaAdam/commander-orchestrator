@@ -184,3 +184,46 @@ def test_bundle_includes_target_for_not_yet_defined_symbol(tmp_path):
     bundle = bundle_failure(fail, repo)
     bundled = " ".join(bundle.related_sources.keys())
     assert "helpers.py" in bundled  # edit target bundled despite undefined symbol
+
+
+# ---------------------------------------------------------------------------
+# Large-file guard: bundle flags big related sources so the fixer prefers
+# apply_diff over replace_file (avoids whole-file-rewrite collateral damage).
+# ---------------------------------------------------------------------------
+
+def test_large_related_source_is_flagged_for_apply_diff(tmp_path):
+    src = tmp_path / "src" / "pkg"
+    src.mkdir(parents=True)
+    (src / "__init__.py").write_text("", encoding="utf-8")
+    # A file comfortably over LARGE_FILE_CHARS (8000).
+    big = "def helper():\n    return 1\n\n" + ("# filler comment line\n" * 600)
+    assert len(big) > fmod.LARGE_FILE_CHARS
+    (src / "big.py").write_text(big, encoding="utf-8")
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    (tests / "test_b.py").write_text(
+        "from pkg.big import new_func\n\ndef test_b():\n    assert new_func() == 1\n",
+        encoding="utf-8")
+
+    fail = make_failure(
+        nodeid="tests/test_b.py::test_b", file="tests/test_b.py",
+        failure_type="error",
+        message="ImportError: cannot import name 'new_func' from 'pkg.big'",
+        traceback='File "tests/test_b.py", line 1\n    from pkg.big import new_func\nImportError',
+    )
+    bundle = bundle_failure(fail, tmp_path)
+    assert bundle.related_source_sizes.get("big.py") == len(big) or any(
+        k.endswith("big.py") for k in bundle.related_source_sizes)
+    assert "LARGE: prefer apply_diff" in bundle.prompt
+
+
+def test_small_related_source_is_not_flagged_large(tmp_path):
+    repo = _mk_module_repo(tmp_path)  # helpers.py / gc.py are tiny
+    fail = make_failure(
+        nodeid="tests/test_w.py::test_w", file="tests/test_w.py",
+        failure_type="error",
+        message="ImportError: cannot import name 'new_func' from 'pkg.helpers'",
+        traceback='File "tests/test_w.py", line 2\n    from pkg.helpers import new_func\nImportError',
+    )
+    bundle = bundle_failure(fail, repo)
+    assert "LARGE: prefer apply_diff" not in bundle.prompt
