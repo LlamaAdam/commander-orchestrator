@@ -54,6 +54,34 @@ def test_claude_route_dispatches_claude_and_records_quota(tmp_path, monkeypatch)
     assert "claude_call" in kinds
 
 
+def test_claude_call_uses_generous_timeout_by_default(tmp_path, monkeypatch):
+    """Fix-path Claude calls regenerate whole files; the 120s claude_cli
+    default times out on large files. Router must pass a longer timeout."""
+    captured = {}
+
+    def _spy(task, **kwargs):
+        captured.update(kwargs)
+        return fake_claude_result(text="ok")
+
+    monkeypatch.setattr(router_mod.triage, "triage",
+                        lambda *a, **k: TriageDecision(handler="claude", reason="hard", via="rule"))
+    monkeypatch.setattr(router_mod.claude_cli, "run_claude", _spy)
+    r = _router(tmp_path)
+    r.handle("regenerate a big file")
+    assert captured.get("timeout_seconds") == 300  # default
+
+
+def test_claude_timeout_is_configurable(tmp_path, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(router_mod.triage, "triage",
+                        lambda *a, **k: TriageDecision(handler="claude", reason="hard", via="rule"))
+    monkeypatch.setattr(router_mod.claude_cli, "run_claude",
+                        lambda task, **k: captured.update(k) or fake_claude_result(text="ok"))
+    r = _router(tmp_path, claude_timeout_seconds=600)
+    r.handle("regenerate a big file")
+    assert captured.get("timeout_seconds") == 600
+
+
 def test_claude_route_blocked_does_not_call_cli(tmp_path, monkeypatch):
     monkeypatch.setattr(router_mod.triage, "triage",
                         lambda *a, **k: TriageDecision(handler="claude", reason="hard", via="rule"))

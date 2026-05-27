@@ -46,11 +46,16 @@ class Router:
         local_model_name: str = local_model.DEFAULT_MODEL,
         ollama_base_url: str = local_model.DEFAULT_OLLAMA_URL,
         claude_model: str | None = None,
+        claude_timeout_seconds: int = 300,
     ):
         self.events_path = Path(events_path)
         self.local_model_name = local_model_name
         self.ollama_base_url = ollama_base_url
         self.claude_model = claude_model
+        # Fix-path Claude calls regenerate whole source files (replace_file),
+        # which routinely exceeds the claude_cli 120s default on larger files.
+        # 300s gives big files room without letting a genuine hang run forever.
+        self.claude_timeout_seconds = claude_timeout_seconds
         self.quota = quota.QuotaTracker(path=quota_path)
 
     # ---- logging ---------------------------------------------------------
@@ -138,7 +143,10 @@ class Router:
                 seconds_until_unblock=secs_left,
             )
 
-        result = claude_cli.run_claude(task, model=self.claude_model)
+        result = claude_cli.run_claude(
+            task, model=self.claude_model,
+            timeout_seconds=self.claude_timeout_seconds,
+        )
         self.quota.record(result)
 
         self._log(
