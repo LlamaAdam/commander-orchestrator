@@ -30,6 +30,29 @@ authenticated under your subscription.
 .venv/Scripts/python scripts/run_continuous.py --hours 12 --stop-when-idle 2
 ```
 
+## Easy run (launcher)
+
+For a no-flags-to-remember entry point, double-click **`Orchestrator.cmd`**
+(or run `.venv\Scripts\orch-launcher.exe`). It opens an interactive menu to
+pick the **target repo to work on** (persisted to
+`data/launcher_config.json`) and run audit / work list / self-test / status /
+a single fix pass / the continuous loop.
+
+`pip install -e .` generates the real `orch-launcher.exe` in `.venv\Scripts\`;
+it re-uses this machine's venv Python (lightweight — no bundling). It's also
+scriptable:
+
+```bash
+.venv/Scripts/orch-launcher.exe set-repo C:\dev\commander-builder
+.venv/Scripts/orch-launcher.exe show
+.venv/Scripts/orch-launcher.exe audit
+.venv/Scripts/orch-launcher.exe run --hours 1
+```
+
+> **Planned next step:** a fully self-contained PyInstaller `.exe` (Python +
+> deps embedded) so it runs on a machine with no venv. The launcher module is
+> already structured for it (`ORCH_PROJECT_ROOT` override for relocated layouts).
+
 ## ⚠️ Critical invariant
 
 This tool runs the `claude` CLI under a **Max subscription**, not the API.

@@ -25,6 +25,7 @@ dev = [
 
 [project.scripts]
 orch = "orchestrator.cli:main"
+orch-launcher = "orchestrator.launcher:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
