@@ -81,6 +81,14 @@ def _is_test_file(path: str) -> bool:
 CONFIDENCE_THRESHOLD = 0.7
 DEDUP_WINDOW_SECONDS = 6 * 3600
 
+# The replace_file action requires the model to emit the COMPLETE corrected
+# file, so the fix bundle must show whole source files -- not the small
+# truncation used for triage classification. A file truncated in the prompt
+# cannot be regenerated, which forces a low-confidence escalate. These budgets
+# are generous enough to show typical target files in full.
+FIX_TEST_SOURCE_CHARS = 12000
+FIX_RELATED_SOURCE_CHARS = 24000
+
 # Tier 3 caps. Once a failure has been attempted MAX_FAILED_ATTEMPTS times
 # without success, OR has caused MAX_REGRESSIONS test regressions, it is
 # permanently dedup'd with LONG_DEDUP_SECONDS so the loop stops banging on it.
@@ -1080,7 +1088,11 @@ def auto_fix_one(
         graduation_path = graduation_path or (project_root / "data" / "graduation_state.json")
         graduation = load_graduation(graduation_path)
 
-    bundle = bundle_failure(failure, repo_dir)
+    bundle = bundle_failure(
+        failure, repo_dir,
+        test_source_chars=FIX_TEST_SOURCE_CHARS,
+        related_source_chars=FIX_RELATED_SOURCE_CHARS,
+    )
 
     # Baseline pytest count (skipped for dry_run since we won't apply anything).
     if dry_run:

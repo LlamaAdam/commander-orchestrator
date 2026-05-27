@@ -57,7 +57,7 @@ class FakeRouter:
 @pytest.fixture
 def stub_seams(monkeypatch):
     """Stub the I/O seams of auto_fix: bundle build, pytest runs, pip apply."""
-    monkeypatch.setattr(af, "bundle_failure", lambda failure, repo_dir: make_bundle())
+    monkeypatch.setattr(af, "bundle_failure", lambda failure, repo_dir, **kw: make_bundle())
     # Successful pip install without touching the network.
     monkeypatch.setattr(af, "apply_install_package",
                         lambda *a, **k: af.ApplyResult(success=True))
@@ -77,6 +77,26 @@ def test_already_fixed_when_baseline_clean(tmp_path, stub_seams):
     attempt = af.auto_fix_one(make_failure(), tmp_path, project_root=tmp_path, router=router)
     assert attempt.status == "already_fixed"
     assert router.handle_calls == 0  # never even asked the model
+
+
+def test_fix_bundle_requests_full_file_budgets(tmp_path, monkeypatch):
+    """replace_file needs the COMPLETE file, so the fix path must build the
+    bundle with the large source budgets (not the small triage default)."""
+    captured = {}
+
+    def _spy(failure, repo_dir, **kw):
+        captured.update(kw)
+        return make_bundle()
+    monkeypatch.setattr(af, "bundle_failure", _spy)
+    monkeypatch.setattr(af, "run_pytest",
+                        lambda repo_dir, lane="fast": _pytest_result(n_failed=0))
+
+    router = FakeRouter(handle=TaskResult(success=True, handler="local", text=_install_action()))
+    af.auto_fix_one(make_failure(), tmp_path, project_root=tmp_path, router=router)
+
+    assert captured.get("related_source_chars") == af.FIX_RELATED_SOURCE_CHARS
+    assert captured.get("test_source_chars") == af.FIX_TEST_SOURCE_CHARS
+    assert af.FIX_RELATED_SOURCE_CHARS >= 20000  # full target files fit
 
 
 def test_tier1_local_install_fixes(tmp_path, stub_seams):
@@ -133,7 +153,7 @@ def test_tier2_replace_file_fixes_source(git_repo, monkeypatch):
     tier-2 Claude returns the COMPLETE corrected file via replace_file, it is
     written directly (no git apply), pytest improves -> fixed and committed on
     an auto-fix branch."""
-    monkeypatch.setattr(af, "bundle_failure", lambda failure, repo_dir: make_bundle())
+    monkeypatch.setattr(af, "bundle_failure", lambda failure, repo_dir, **kw: make_bundle())
     results = [_pytest_result(n_failed=1), _pytest_result(n_failed=0)]
     monkeypatch.setattr(af, "run_pytest", lambda repo_dir, lane="fast": results.pop(0))
 
@@ -157,7 +177,7 @@ def test_tier2_replace_file_fixes_source(git_repo, monkeypatch):
 def test_replace_file_regression_is_reverted(git_repo, monkeypatch):
     """If the rewrite does NOT reduce failures, the patched file is reverted to
     its committed state (WIP-safe) and the attempt is recorded as regressed."""
-    monkeypatch.setattr(af, "bundle_failure", lambda failure, repo_dir: make_bundle())
+    monkeypatch.setattr(af, "bundle_failure", lambda failure, repo_dir, **kw: make_bundle())
     # baseline=1, after-apply still 1 -> no improvement -> regressed/reverted.
     results = [_pytest_result(n_failed=1), _pytest_result(n_failed=1)]
     monkeypatch.setattr(af, "run_pytest", lambda repo_dir, lane="fast": results.pop(0))
@@ -178,7 +198,7 @@ def test_local_test_weakening_is_refused_and_reverted(git_repo, monkeypatch):
     """A local apply_diff that guts the failing test's assertion must be refused
     (escalated) and reverted -- the orchestrator never makes a suite green by
     weakening a test."""
-    monkeypatch.setattr(af, "bundle_failure", lambda failure, repo_dir: make_bundle())
+    monkeypatch.setattr(af, "bundle_failure", lambda failure, repo_dir, **kw: make_bundle())
     # Only the baseline pytest runs; the guard fires before the after-run.
     monkeypatch.setattr(af, "run_pytest",
                         lambda repo_dir, lane="fast": _pytest_result(n_failed=1))
