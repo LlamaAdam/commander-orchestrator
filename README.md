@@ -49,6 +49,19 @@ scriptable:
 .venv/Scripts/orch-launcher.exe run --hours 1
 ```
 
+**Project Manager** (menu option 8 / `orch-launcher pm`) surveys the target
+repo and prints one prioritized plan: what the fix loop can auto-fix *now*
+(failing tests), what needs a human/Claude task (open backlog + FP roadmap),
+and deferred tests. It can also register an unattended run via Windows Task
+Scheduler:
+
+```bash
+.venv/Scripts/orch-launcher.exe pm --scan-tests          # plan + live failing-test count
+.venv/Scripts/orch-launcher.exe pm schedule --schedule DAILY --time 02:00
+.venv/Scripts/orch-launcher.exe pm list                  # show scheduled Orchestrator-* tasks
+.venv/Scripts/orch-launcher.exe pm unschedule NightlyFix
+```
+
 > **Planned next step:** a fully self-contained PyInstaller `.exe` (Python +
 > deps embedded) so it runs on a machine with no venv. The launcher module is
 > already structured for it (`ORCH_PROJECT_ROOT` override for relocated layouts).
