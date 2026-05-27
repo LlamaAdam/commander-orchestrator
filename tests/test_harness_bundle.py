@@ -131,3 +131,56 @@ def test_bundle_shows_failing_function_in_large_file(tmp_path):
     assert "verdict(1) == 'kept'" in bundle.test_source
     # And its implementation got bundled.
     assert any("impl.py" in k for k in bundle.related_sources)
+
+
+# ---------------------------------------------------------------------------
+# Module-path resolution: the file under test is bundled even when the
+# function doesn't exist yet (TDD) or is reached via `module.attr` -- cases
+# the symbol-definition search can't catch.
+# ---------------------------------------------------------------------------
+
+def _mk_module_repo(tmp_path):
+    src = tmp_path / "src" / "pkg"
+    src.mkdir(parents=True)
+    (src / "__init__.py").write_text("", encoding="utf-8")
+    # `from pkg import gc`: gc.py defines OTHER names (no `def gc`).
+    (src / "gc.py").write_text(
+        "FALLBACK = ['a']\n\ndef fetch():\n    return set(FALLBACK)\n", encoding="utf-8")
+    # `from pkg.helpers import new_func`: new_func doesn't exist yet.
+    (src / "helpers.py").write_text("def existing():\n    return 1\n", encoding="utf-8")
+    # `import analysis`: scripts-style bare module placed on sys.path.
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "analysis.py").write_text("X = 1\n", encoding="utf-8")
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    (tests / "test_w.py").write_text(
+        "from pkg import gc\n"
+        "from pkg.helpers import new_func\n"
+        "import analysis\n\n"
+        "def test_w():\n    assert gc.fetch() == {'a'}\n",
+        encoding="utf-8")
+    return tmp_path
+
+
+def test_resolve_module_files_finds_import_targets(tmp_path):
+    repo = _mk_module_repo(tmp_path)
+    test_src = (repo / "tests" / "test_w.py").read_text(encoding="utf-8")
+    names = {p.name for p in fmod._resolve_module_files(test_src, repo, limit=10)}
+    assert "gc.py" in names        # from pkg import gc (submodule, no `def gc`)
+    assert "helpers.py" in names   # from pkg.helpers import new_func (undefined yet)
+    assert "analysis.py" in names  # import analysis (scripts/, by leaf filename)
+
+
+def test_bundle_includes_target_for_not_yet_defined_symbol(tmp_path):
+    repo = _mk_module_repo(tmp_path)
+    fail = make_failure(
+        nodeid="tests/test_w.py::test_w",
+        file="tests/test_w.py",
+        failure_type="error",
+        message="ImportError: cannot import name 'new_func' from 'pkg.helpers'",
+        traceback='File "tests/test_w.py", line 2\n    from pkg.helpers import new_func\nImportError',
+    )
+    bundle = bundle_failure(fail, repo)
+    bundled = " ".join(bundle.related_sources.keys())
+    assert "helpers.py" in bundled  # edit target bundled despite undefined symbol

@@ -206,6 +206,83 @@ def _find_definition_files(symbols, repo_dir: Path, limit: int) -> list:
     return found
 
 
+_FROM_MODULE_RE = re.compile(r"^\s*from\s+([\w.]+)\s+import\s+(.+?)(?:#.*)?$", re.MULTILINE)
+_IMPORT_MODULE_RE = re.compile(r"^\s*import\s+([\w.][\w.\s,]*?)(?:\s+as\s+\w+)?(?:#.*)?$", re.MULTILINE)
+
+
+def _imported_module_paths(test_source: str) -> list:
+    """Ordered dotted module paths a test imports, most-specific first.
+
+    Captures `from A.B import x, y` (-> submodule candidates A.B.x / A.B.y,
+    then A.B) and `import A.B [as c]`. Submodule candidates rank first so
+    `from pkg import submod` resolves to pkg/submod.py, not pkg/__init__.py."""
+    submods: list = []
+    from_mods: list = []
+    import_mods: list = []
+    for m in _FROM_MODULE_RE.finditer(test_source or ""):
+        mod = m.group(1)
+        from_mods.append(mod)
+        for piece in m.group(2).replace("(", " ").replace(")", " ").split(","):
+            name = piece.strip().split(" as ")[0].strip()
+            if name and name != "*" and name.isidentifier():
+                submods.append(f"{mod}.{name}")
+    for m in _IMPORT_MODULE_RE.finditer(test_source or ""):
+        for chunk in m.group(1).split(","):
+            mod = chunk.strip().split(" as ")[0].strip()
+            if mod and all(p.isidentifier() for p in mod.split(".")):
+                import_mods.append(mod)
+    return list(dict.fromkeys(submods + from_mods + import_mods))
+
+
+def _resolve_module_files(test_source: str, repo_dir: Path, limit: int) -> list:
+    """Resolve a test's imported modules to repo source files, by PATH.
+
+    Unlike `_find_definition_files` (which needs the symbol already DEFINED),
+    this finds the file a test targets even when the function under test does
+    not exist yet (TDD work items) or is reached via ``module.attr`` -- the
+    cases that otherwise leave the fixer with no source to edit."""
+    if limit <= 0:
+        return []
+    try:
+        repo_resolved = repo_dir.resolve()
+    except (OSError, ValueError):
+        return []
+    roots = [r for r in (repo_resolved / "src", repo_resolved) if r.is_dir()]
+    found: list = []
+    found_set = set()
+    for dotted in _imported_module_paths(test_source):
+        parts = dotted.split(".")
+        hit = None
+        for root in roots:
+            for rel in (Path(*parts).with_suffix(".py"), Path(*parts) / "__init__.py"):
+                cand = root / rel
+                if cand.is_file():
+                    hit = cand.resolve()
+                    break
+            if hit:
+                break
+        # Fallback: a bare module not on a package path (e.g. scripts/foo.py
+        # placed on sys.path by the test) -> search by leaf filename.
+        if hit is None and len(parts) == 1:
+            for root in roots:
+                for cand in root.rglob(parts[0] + ".py"):
+                    if any(p in _SKIP_DIRS for p in cand.parts):
+                        continue
+                    hit = cand.resolve()
+                    break
+                if hit:
+                    break
+        if hit is None or hit in found_set:
+            continue
+        if hit.name.startswith("test_") or hit.parent.name == "tests":
+            continue
+        found.append(hit)
+        found_set.add(hit)
+        if len(found) >= limit:
+            break
+    return found
+
+
 def bundle_failure(
     failure: TestFailure,
     repo_dir: Path,
@@ -275,6 +352,18 @@ def bundle_failure(
         if test_abs is not None:
             related = [p for p in related if p != test_abs]
         related = related[:max_related_files]
+
+        # Module files the test imports -- the actual edit targets. Resolved
+        # by path, so found even when the function under test doesn't exist
+        # yet (TDD) or is reached via `module.attr` -- cases neither the
+        # traceback nor _find_definition_files can surface. Highest priority,
+        # so prepend (reversed -> first import ends up first after inserts).
+        for p in reversed(_resolve_module_files(
+            full_test_text or bundle.test_source, repo_dir,
+            max_related_files + max_definition_files,
+        )):
+            if (test_abs is None or p != test_abs) and p not in related:
+                related.insert(0, p)
 
         # Add definition files for the test's imported symbols (deduped,
         # excluding the test itself + anything already in `related`).

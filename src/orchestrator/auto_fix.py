@@ -87,7 +87,7 @@ DEDUP_WINDOW_SECONDS = 6 * 3600
 # cannot be regenerated, which forces a low-confidence escalate. These budgets
 # are generous enough to show typical target files in full.
 FIX_TEST_SOURCE_CHARS = 12000
-FIX_RELATED_SOURCE_CHARS = 24000
+FIX_RELATED_SOURCE_CHARS = 40000
 
 # Tier 3 caps. Once a failure has been attempted MAX_FAILED_ATTEMPTS times
 # without success, OR has caused MAX_REGRESSIONS test regressions, it is
